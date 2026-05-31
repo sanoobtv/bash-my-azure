@@ -80,7 +80,8 @@ echo ""
 
 # Check az CLI
 if command -v az &>/dev/null; then
-  echo "az CLI found: $(az version --query '\"azure-cli\"' -o tsv 2>/dev/null || echo 'unknown version')"
+  az_ver=$(az version -o yaml 2>/dev/null | grep '^azure-cli:' | awk '{print $2}') || az_ver=""
+  echo "az CLI found: ${az_ver:-unknown version}"
 else
   echo "WARNING: az CLI not found. Install: https://aka.ms/install-az"
 fi
