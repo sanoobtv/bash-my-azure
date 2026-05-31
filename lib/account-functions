@@ -1,0 +1,78 @@
+#!/bin/bash
+#
+# account-functions
+#
+# List and manage Azure subscriptions
+
+accounts() {
+
+  # List Azure subscriptions
+  #
+  #     $ accounts
+  #     sub-id-1  my-sub-name      Enabled  true
+  #     sub-id-2  other-sub-name   Enabled  false
+  #
+  # *Optionally provide a filter string:*
+  #
+  #     $ accounts prod
+  #     sub-id-1  my-prod-sub  Enabled  true
+
+  [[ "${1:-}" == --help ]] && __bmaz_help && return 0
+
+  local filters=$(__bmaz_read_filters "$@")
+
+  az account list \
+    --output tsv  \
+    --query "[].{
+      Id:id,
+      Name:name,
+      State:state,
+      IsDefault:isDefault
+    }" |
+  grep -E -- "$filters" |
+  LC_ALL=C sort -t$'\t' -k 2 |
+    columnise
+}
+
+
+account-show() {
+
+  # Show current/default subscription
+  #
+  #     $ account-show
+  #     sub-id-1  my-sub-name  tenantId  Enabled
+
+  [[ "${1:-}" == --help ]] && __bmaz_help && return 0
+
+  az account show \
+    --output tsv  \
+    --query "{
+      Id:id,
+      Name:name,
+      TenantId:tenantId,
+      State:state
+    }" |
+    columnise
+}
+
+
+account-set() {
+
+  # Switch active subscription
+  #
+  #     USAGE: account-set subscription-name-or-id
+  #
+  #     $ accounts | grep prod | account-set
+  #     Switched to: my-prod-sub (sub-id-1)
+
+  [[ "${1:-}" == --help ]] && __bmaz_help && return 0
+
+  local sub_ids=($(skim-stdin "$@"))
+  [[ ${#sub_ids[@]} -eq 0 ]] && __bmaz_usage "subscription-name-or-id" && return 1
+
+  local sub_id
+  for sub_id in "${sub_ids[@]}"; do
+    az account set --subscription "$sub_id" &&
+      echo "Switched to: $(az account show --query 'name' -o tsv) ($(az account show --query 'id' -o tsv))"
+  done
+}

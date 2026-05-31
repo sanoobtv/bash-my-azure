@@ -1,0 +1,19 @@
+# Vendored upstream (reference only, not part of this project)
+bash-my-aws/
+
+# Internal docs (handoff notes, sensitive context)
+docs/
+
+# Scratch/input files
+input.md
+
+# macOS
+.DS_Store
+
+# Editor
+*.swp
+*.swo
+*~
+.vscode/
+.idea/
+.claude/

@@ -1,0 +1,123 @@
+#!/bin/bash
+#
+# rg-functions
+#
+# List and manage Azure Resource Groups
+
+rgs() {
+
+  # List Resource Groups
+  #
+  #     $ rgs
+  #     prod-rg      eastus     Succeeded
+  #     dev-rg       westus2    Succeeded
+  #     test-rg      australiaeast  Succeeded
+  #
+  # *Optionally provide a filter string:*
+  #
+  #     $ rgs prod
+  #     prod-rg  eastus  Succeeded
+
+  [[ "${1:-}" == --help ]] && __bmaz_help && return 0
+
+  local filters=$(__bmaz_read_filters "$@")
+
+  az group list   \
+    --output tsv  \
+    --query "[].{
+      Name:name,
+      Location:location,
+      State:properties.provisioningState
+    }" |
+  grep -E -- "$filters" |
+  LC_ALL=C sort -t$'\t' -k 1 |
+    columnise
+}
+
+
+rg-resources() {
+
+  # List resources in a Resource Group
+  #
+  #     USAGE: rg-resources rg-name [rg-name]
+  #
+  #     $ rgs | grep prod | rg-resources
+  #     prod-rg/web01       Microsoft.Compute/virtualMachines   eastus
+  #     prod-rg/web01-nic   Microsoft.Network/networkInterfaces eastus
+
+  [[ "${1:-}" == --help ]] && __bmaz_help && return 0
+
+  local rg_names=($(skim-stdin "$@"))
+  [[ ${#rg_names[@]} -eq 0 ]] && __bmaz_usage "rg-name [rg-name]" && return 1
+
+  local rg_name
+  for rg_name in "${rg_names[@]}"; do
+    az resource list            \
+      --resource-group "$rg_name" \
+      --output tsv              \
+      --query "[].{
+        Id:join('/', ['$rg_name', name]),
+        Type:type,
+        Location:location
+      }"
+  done |
+    columnise
+}
+
+
+rg-create() {
+
+  # Create a Resource Group
+  #
+  #     USAGE: rg-create rg-name location
+  #
+  #     $ rg-create my-new-rg australiaeast
+  #     Created: my-new-rg (australiaeast)
+
+  [[ "${1:-}" == --help ]] && __bmaz_help && return 0
+
+  local rg_name="$1"
+  local location="${2:-australiaeast}"
+  [[ -z $rg_name ]] && __bmaz_usage "rg-name [location]" && return 1
+
+  az group create             \
+    --name "$rg_name"         \
+    --location "$location"    \
+    --output tsv              \
+    --query "{Name:name, Location:location, State:properties.provisioningState}" |
+    columnise
+}
+
+
+rg-delete() {
+
+  # Delete Resource Group(s) (with confirmation)
+  #
+  #     USAGE: rg-delete rg-name [rg-name]
+  #
+  #     $ rgs | grep test | rg-delete
+  #     You are about to delete the following Resource Groups:
+  #     test-rg
+  #     Are you sure you want to continue? y
+
+  [[ "${1:-}" == --help ]] && __bmaz_help && return 0
+
+  local rg_names=($(skim-stdin "$@"))
+  [[ ${#rg_names[@]} -eq 0 ]] && __bmaz_usage "rg-name [rg-name]" && return 1
+
+  echo "You are about to delete the following Resource Groups:"
+  for rg_name in "${rg_names[@]}"; do
+    echo "  $rg_name"
+  done
+
+  [ -t 0 ] || exec </dev/tty # reattach keyboard to STDIN
+  local regex_yes="^[Yy]$"
+  read -p "Are you sure you want to continue? " -n 1 -r
+  echo
+  if [[ $REPLY =~ $regex_yes ]]; then
+    for rg_name in "${rg_names[@]}"; do
+      echo "Deleting $rg_name..."
+      az group delete --name "$rg_name" --yes --no-wait
+    done
+  fi
+}

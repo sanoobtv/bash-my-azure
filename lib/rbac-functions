@@ -1,0 +1,130 @@
+#!/bin/bash
+#
+# rbac-functions
+#
+# List, create, and delete Azure RBAC role assignments
+
+role-assignments() {
+
+  # List RBAC role assignments
+  #
+  #     $ role-assignments
+  #     alice@contoso.com    Contributor   /subscriptions/.../resourceGroups/prod-rg
+  #     sg-admins            Owner         /subscriptions/.../resourceGroups/prod-rg
+  #     my-managed-id        Reader        /subscriptions/...
+  #
+  # Scoped to resource group when BMAZ_DEFAULT_RG is set.
+  #
+  # *Optionally provide a filter string:*
+  #
+  #     $ role-assignments Owner
+  #     sg-admins  Owner  /subscriptions/.../resourceGroups/prod-rg
+
+  [[ "${1:-}" == --help ]] && __bmaz_help && return 0
+
+  local filters=$(__bmaz_read_filters "$@")
+
+  local scope_args=()
+  if [[ -n "$BMAZ_DEFAULT_RG" ]]; then
+    local sub_id=$(az account show --query "id" --output tsv)
+    scope_args=(--scope "/subscriptions/$sub_id/resourceGroups/$BMAZ_DEFAULT_RG")
+  fi
+
+  az role assignment list "${scope_args[@]}" \
+    --output tsv                             \
+    --query "[].{
+      Principal:principalName || principalId,
+      Role:roleDefinitionName,
+      Scope:scope
+    }" |
+  grep -E -- "$filters" |
+  LC_ALL=C sort -t$'\t' -k 2 |
+    columnise
+}
+
+
+role-definitions() {
+
+  # List available RBAC role definitions
+  #
+  #     $ role-definitions
+  #     Contributor                 BuiltInRole   Has full access except managing RBAC
+  #     Owner                       BuiltInRole   Full access including RBAC
+  #     Reader                      BuiltInRole   View all resources
+  #
+  # *Optionally provide a filter string:*
+  #
+  #     $ role-definitions Contrib
+  #     Contributor  BuiltInRole  Has full access except managing RBAC
+
+  [[ "${1:-}" == --help ]] && __bmaz_help && return 0
+
+  local filters=$(__bmaz_read_filters "$@")
+
+  az role definition list  \
+    --output tsv           \
+    --query "[].{
+      RoleName:roleName,
+      Type:roleType,
+      Description:description
+    }" |
+  grep -E -- "$filters" |
+  LC_ALL=C sort -t$'\t' -k 1 |
+    columnise
+}
+
+
+role-assignment-create() {
+
+  # Create a role assignment
+  #
+  #     USAGE: role-assignment-create principal-id role-name scope
+  #
+  #     $ role-assignment-create alice@contoso.com Reader /subscriptions/.../resourceGroups/dev-rg
+  #     Created role assignment: alice@contoso.com as Reader
+
+  [[ "${1:-}" == --help ]] && __bmaz_help && return 0
+
+  local assignee="$1"
+  local role="$2"
+  local scope="$3"
+  [[ -z "$assignee" || -z "$role" || -z "$scope" ]] && \
+    __bmaz_usage "principal-id role-name scope" && return 1
+
+  az role assignment create    \
+    --assignee "$assignee"     \
+    --role "$role"             \
+    --scope "$scope"           \
+    --output tsv               \
+    --query "principalName" > /dev/null && \
+  echo "Created role assignment: $assignee as $role"
+}
+
+
+role-assignment-delete() {
+
+  # Delete a role assignment
+  #
+  #     USAGE: role-assignment-delete principal-id role-name scope
+  #
+  #     $ role-assignment-delete alice@contoso.com Reader /subscriptions/.../resourceGroups/dev-rg
+  #     Deleted role assignment: alice@contoso.com as Reader
+
+  [[ "${1:-}" == --help ]] && __bmaz_help && return 0
+
+  local assignee="$1"
+  local role="$2"
+  local scope="$3"
+  [[ -z "$assignee" || -z "$role" || -z "$scope" ]] && \
+    __bmaz_usage "principal-id role-name scope" && return 1
+
+  echo "Deleting role assignment: $assignee as $role on $scope"
+  read -r -p "Are you sure? [y/N] " response
+  [[ "$response" =~ ^[Yy] ]] || return 0
+
+  az role assignment delete    \
+    --assignee "$assignee"     \
+    --role "$role"             \
+    --scope "$scope" && \
+  echo "Deleted role assignment: $assignee as $role"
+}

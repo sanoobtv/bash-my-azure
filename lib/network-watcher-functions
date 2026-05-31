@@ -1,0 +1,258 @@
+#!/bin/bash
+#
+# network-watcher-functions
+#
+# Azure Network Watcher tools for route/connectivity troubleshooting.
+# Equivalent to AWS Reachability Analyzer / VPC route analysis.
+
+vm-effective-routes() {
+
+  # Show effective route table for VM's NIC
+  #
+  #     USAGE: vm-effective-routes rg/name [rg/name]
+  #
+  #     $ vms | vm-effective-routes
+  #     bmaz-test-rg/bmaz-test-vm  VirtualNetworkGateway  10.1.0.0/16  VnetLocal
+  #     bmaz-test-rg/bmaz-test-vm  Default                0.0.0.0/0    Internet
+  #
+  # Shows: source, addressPrefix, nextHopType, nextHopIp (if any)
+
+  [[ "${1:-}" == --help ]] && __bmaz_help && return 0
+
+  local vm_ids=($(skim-stdin "$@"))
+  [[ ${#vm_ids[@]} -eq 0 ]] && __bmaz_usage "rg/name [rg/name]" && return 1
+
+  local vm_id
+  for vm_id in "${vm_ids[@]}"; do
+    __bmaz_parse_resource "$vm_id" || return 1
+
+    # Get primary NIC name from VM
+    local nic_id
+    nic_id=$(az vm show \
+      --resource-group "$_bmaz_rg" \
+      --name "$_bmaz_name" \
+      --query "networkProfile.networkInterfaces[0].id" \
+      --output tsv)
+
+    [[ -z "$nic_id" ]] && __bmaz_error "No NIC found for $vm_id" && continue
+
+    az network nic show-effective-route-table \
+      --ids "$nic_id" \
+      --output tsv \
+      --query "value[].{
+        VM:'$vm_id',
+        Source:source,
+        Prefix:addressPrefix[0],
+        NextHopType:nextHopType,
+        NextHopIp:nextHopIpAddress[0]
+      }" 2>/dev/null ||
+    az network nic show-effective-route-table \
+      --ids "$nic_id" \
+      --output tsv \
+      --query "[].{
+        VM:'$vm_id',
+        Source:source,
+        Prefix:addressPrefix[0],
+        NextHopType:nextHopType,
+        NextHopIp:nextHopIpAddress[0]
+      }" 2>/dev/null
+  done |
+    columnise
+}
+
+
+vm-next-hop() {
+
+  # Show next hop for traffic from VM to a destination IP
+  #
+  #     USAGE: vm-next-hop rg/name dest-ip [source-ip]
+  #
+  #     $ vm-next-hop bmaz-test-rg/bmaz-test-vm 10.1.0.4
+  #     bmaz-test-rg/bmaz-test-vm  10.1.0.4  VirtualNetworkGateway  10.0.0.1
+  #
+  #     $ vms | vm-next-hop 8.8.8.8
+  #     bmaz-test-rg/bmaz-test-vm  8.8.8.8  Internet  None
+  #
+  # If source-ip is omitted, auto-detects from VM's primary NIC.
+
+  [[ "${1:-}" == --help ]] && __bmaz_help && return 0
+
+  local vm_ids=($(skim-stdin))
+  local dest_ip=""
+  local source_ip=""
+
+  # Parse positional args
+  if [[ ${#vm_ids[@]} -eq 0 ]]; then
+    # Not piped: vm-next-hop rg/name dest-ip [source-ip]
+    [[ $# -lt 2 ]] && __bmaz_usage "rg/name dest-ip [source-ip]" && return 1
+    vm_ids=("$1")
+    dest_ip="$2"
+    source_ip="${3:-}"
+  else
+    # Piped: vms | vm-next-hop dest-ip [source-ip]
+    [[ $# -lt 1 ]] && __bmaz_usage "dest-ip [source-ip] (pipe VM from upstream)" && return 1
+    dest_ip="$1"
+    source_ip="${2:-}"
+  fi
+
+  local vm_id
+  for vm_id in "${vm_ids[@]}"; do
+    __bmaz_parse_resource "$vm_id" || return 1
+
+    # Auto-detect source IP if not provided
+    local src="$source_ip"
+    if [[ -z "$src" ]]; then
+      src=$(az vm list-ip-addresses \
+        --resource-group "$_bmaz_rg" \
+        --name "$_bmaz_name" \
+        --query "[0].virtualMachine.network.privateIpAddresses[0]" \
+        --output tsv)
+    fi
+
+    [[ -z "$src" ]] && __bmaz_error "Cannot detect source IP for $vm_id" && continue
+
+    az network watcher show-next-hop \
+      --resource-group "$_bmaz_rg" \
+      --vm "$_bmaz_name" \
+      --source-ip "$src" \
+      --dest-ip "$dest_ip" \
+      --output tsv \
+      --query "{
+        VM:'$vm_id',
+        Destination:'$dest_ip',
+        NextHopType:nextHopType,
+        NextHopIp:nextHopIpAddress,
+        RouteTable:routeTableId
+      }"
+  done |
+    columnise
+}
+
+
+vm-test-flow() {
+
+  # Test if NSG rules allow/deny a specific packet
+  #
+  #     USAGE: vm-test-flow rg/name direction protocol local-ip:port remote-ip:port
+  #
+  #     $ vm-test-flow bmaz-test-rg/bmaz-test-vm Outbound TCP 10.0.0.4:* 8.8.8.8:443
+  #     bmaz-test-rg/bmaz-test-vm  Allow  DefaultRule_AllowInternetOutBound
+  #
+  #     $ vms | vm-test-flow Inbound TCP 10.0.0.4:22 203.0.113.1:*
+  #     bmaz-test-rg/bmaz-test-vm  Allow  AllowSSH
+  #
+  # direction: Inbound | Outbound
+  # protocol: TCP | UDP
+
+  [[ "${1:-}" == --help ]] && __bmaz_help && return 0
+
+  local vm_ids=($(skim-stdin))
+  local direction="" protocol="" local_addr="" remote_addr=""
+
+  if [[ ${#vm_ids[@]} -eq 0 ]]; then
+    # Not piped: vm-test-flow rg/name direction protocol local remote
+    [[ $# -lt 5 ]] && __bmaz_usage "rg/name direction protocol local-ip:port remote-ip:port" && return 1
+    vm_ids=("$1")
+    direction="$2"
+    protocol="$3"
+    local_addr="$4"
+    remote_addr="$5"
+  else
+    # Piped: vms | vm-test-flow direction protocol local remote
+    [[ $# -lt 4 ]] && __bmaz_usage "direction protocol local-ip:port remote-ip:port (pipe VM from upstream)" && return 1
+    direction="$1"
+    protocol="$2"
+    local_addr="$3"
+    remote_addr="$4"
+  fi
+
+  local vm_id
+  for vm_id in "${vm_ids[@]}"; do
+    __bmaz_parse_resource "$vm_id" || return 1
+
+    az network watcher test-ip-flow \
+      --resource-group "$_bmaz_rg" \
+      --vm "$_bmaz_name" \
+      --direction "$direction" \
+      --protocol "$protocol" \
+      --local "$local_addr" \
+      --remote "$remote_addr" \
+      --output tsv \
+      --query "{
+        VM:'$vm_id',
+        Access:access,
+        Rule:ruleName
+      }"
+  done |
+    columnise
+}
+
+
+vm-test-connectivity() {
+
+  # Test end-to-end connectivity from VM to a destination
+  #
+  #     USAGE: vm-test-connectivity rg/name dest-ip dest-port [protocol]
+  #
+  #     $ vm-test-connectivity bmaz-test-rg/bmaz-test-vm 8.8.8.8 443
+  #     bmaz-test-rg/bmaz-test-vm  8.8.8.8:443  Reachable  45ms  3 hops
+  #
+  #     $ vms | vm-test-connectivity 10.1.0.4 5432 Tcp
+  #     bmaz-test-rg/bmaz-test-vm  10.1.0.4:5432  Reachable  12ms  2 hops
+  #
+  # protocol: Tcp (default) | Http | Https | Icmp
+  # NOTE: Requires NetworkWatcherAgent VM extension installed on source VM.
+  #       Install with: az vm extension set --vm-name <vm> -g <rg> \
+  #         --publisher Microsoft.Azure.NetworkWatcher \
+  #         --name NetworkWatcherAgentLinux  (or NetworkWatcherAgentWindows)
+
+  [[ "${1:-}" == --help ]] && __bmaz_help && return 0
+
+  local vm_ids=($(skim-stdin))
+  local dest_addr="" dest_port="" protocol="Tcp"
+
+  if [[ ${#vm_ids[@]} -eq 0 ]]; then
+    # Not piped: vm-test-connectivity rg/name dest-ip dest-port [protocol]
+    [[ $# -lt 3 ]] && __bmaz_usage "rg/name dest-ip dest-port [protocol]" && return 1
+    vm_ids=("$1")
+    dest_addr="$2"
+    dest_port="$3"
+    [[ -n "$4" ]] && protocol="$4"
+  else
+    # Piped: vms | vm-test-connectivity dest-ip dest-port [protocol]
+    [[ $# -lt 2 ]] && __bmaz_usage "dest-ip dest-port [protocol] (pipe VM from upstream)" && return 1
+    dest_addr="$1"
+    dest_port="$2"
+    [[ -n "$3" ]] && protocol="$3"
+  fi
+
+  local vm_id
+  for vm_id in "${vm_ids[@]}"; do
+    __bmaz_parse_resource "$vm_id" || return 1
+
+    # az emits TSV: connectionStatus <TAB> avgLatencyInMs <TAB> hopCount
+    local result
+    result=$(az network watcher test-connectivity \
+      --resource-group "$_bmaz_rg" \
+      --source-resource "$_bmaz_name" \
+      --dest-address "$dest_addr" \
+      --dest-port "$dest_port" \
+      --protocol "$protocol" \
+      --output tsv \
+      --query "[connectionStatus, avgLatencyInMs, length(hops)]" 2>&1)
+
+    # shellcheck disable=SC2181  # need exit code of the assignment's command substitution
+    if [[ $? -ne 0 ]]; then
+      local state="Error"
+      [[ "$result" == *NetworkWatcherVmExtensionNotInstalled* ]] && state="ExtensionRequired"
+      printf '%s\t%s:%s\t%s\t%s\t%s\n' "$vm_id" "$dest_addr" "$dest_port" "$state" "-" "-"
+      continue
+    fi
+
+    local status avg_latency hop_count
+    IFS=$'\t' read -r status avg_latency hop_count <<< "$result"
+    printf '%s\t%s:%s\t%s\t%sms\t%s hops\n' \
+      "$vm_id" "$dest_addr" "$dest_port" "${status:-Unknown}" "${avg_latency:-?}" "${hop_count:-?}"
+  done |
+    columnise
+}

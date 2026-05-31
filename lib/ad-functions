@@ -1,0 +1,156 @@
+#!/bin/bash
+#
+# ad-functions
+#
+# List and inspect Entra ID (Azure AD) users, groups, and app registrations
+
+ad-users() {
+
+  # List Entra ID users
+  #
+  #     $ ad-users
+  #     alice@contoso.com   Alice Smith    true   Member
+  #     bob@contoso.com     Bob Jones      true   Member
+  #     svc-app@contoso.com Service Acct   true   Member
+  #
+  # *Optionally provide a filter string:*
+  #
+  #     $ ad-users alice
+  #     alice@contoso.com  Alice Smith  true  Member
+
+  [[ "${1:-}" == --help ]] && __bmaz_help && return 0
+
+  local filters=$(__bmaz_read_filters "$@")
+
+  az ad user list          \
+    --output tsv           \
+    --query "[].{
+      UPN:userPrincipalName,
+      DisplayName:displayName,
+      Enabled:accountEnabled,
+      Type:userType
+    }" |
+  grep -E -- "$filters" |
+  LC_ALL=C sort -t$'\t' -k 1 |
+    columnise
+}
+
+
+ad-groups() {
+
+  # List Entra ID groups
+  #
+  #     $ ad-groups
+  #     sg-developers   Security  Developer team access group
+  #     sg-admins       Security  Admin team access group
+  #
+  # *Optionally provide a filter string:*
+  #
+  #     $ ad-groups admin
+  #     sg-admins  Security  Admin team access group
+
+  [[ "${1:-}" == --help ]] && __bmaz_help && return 0
+
+  local filters=$(__bmaz_read_filters "$@")
+
+  az ad group list         \
+    --output tsv           \
+    --query "[].{
+      DisplayName:displayName,
+      Type:securityEnabled && 'Security' || 'M365',
+      Description:description || '(none)'
+    }" |
+  grep -E -- "$filters" |
+  LC_ALL=C sort -t$'\t' -k 1 |
+    columnise
+}
+
+
+ad-group-members() {
+
+  # List members of an Entra ID group
+  #
+  #     USAGE: ad-group-members group-display-name [group-display-name]
+  #
+  #     $ ad-groups | grep admin | ad-group-members
+  #     sg-admins  alice@contoso.com  Alice Smith
+  #     sg-admins  bob@contoso.com    Bob Jones
+
+  [[ "${1:-}" == --help ]] && __bmaz_help && return 0
+
+  local group_names=($(skim-stdin "$@"))
+  [[ ${#group_names[@]} -eq 0 ]] && __bmaz_usage "group-display-name [group-display-name]" && return 1
+
+  local group_name
+  for group_name in "${group_names[@]}"; do
+    az ad group member list            \
+      --group "$group_name"            \
+      --output tsv                     \
+      --query "[].{
+        Group:'$group_name',
+        UPN:userPrincipalName || displayName,
+        DisplayName:displayName
+      }" 2>/dev/null
+  done |
+    columnise
+}
+
+
+ad-apps() {
+
+  # List Entra ID App Registrations
+  #
+  #     $ ad-apps
+  #     my-api-app     12345678-abcd-efgh-1234-567890abcdef  2025-03-15T00:00:00Z
+  #     my-web-app     87654321-dcba-hgfe-4321-fedcba098765  2024-11-01T00:00:00Z
+  #
+  # *Optionally provide a filter string:*
+  #
+  #     $ ad-apps api
+  #     my-api-app  12345678-abcd-efgh-1234-567890abcdef  2025-03-15T00:00:00Z
+
+  [[ "${1:-}" == --help ]] && __bmaz_help && return 0
+
+  local filters=$(__bmaz_read_filters "$@")
+
+  az ad app list --all     \
+    --output tsv           \
+    --query "[].{
+      DisplayName:displayName,
+      AppId:appId,
+      Created:createdDateTime
+    }" |
+  grep -E -- "$filters" |
+  LC_ALL=C sort -t$'\t' -k 1 |
+    columnise
+}
+
+
+ad-sp() {
+
+  # List Entra ID Service Principals
+  #
+  #     $ ad-sp
+  #     my-api-sp     12345678-abcd-efgh-1234-567890abcdef  Application
+  #     my-managed-id 87654321-dcba-hgfe-4321-fedcba098765  ManagedIdentity
+  #
+  # *Optionally provide a filter string:*
+  #
+  #     $ ad-sp managed
+  #     my-managed-id  87654321-dcba-hgfe-4321-fedcba098765  ManagedIdentity
+
+  [[ "${1:-}" == --help ]] && __bmaz_help && return 0
+
+  local filters=$(__bmaz_read_filters "$@")
+
+  az ad sp list --all      \
+    --output tsv           \
+    --query "[].{
+      DisplayName:displayName,
+      AppId:appId,
+      Type:servicePrincipalType
+    }" |
+  grep -E -- "$filters" |
+  LC_ALL=C sort -t$'\t' -k 1 |
+    columnise
+}

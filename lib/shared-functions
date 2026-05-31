@@ -1,0 +1,134 @@
+#!/bin/bash
+#
+# shared-functions
+#
+# Core utilities used by all bash-my-azure functions.
+
+
+skim-stdin() {
+
+  # Append first token from each line of STDIN to argument list
+  #
+  # Implementation of `pipe-skimming` pattern.
+  #
+  #     $ vms | skim-stdin foo bar
+  #     foo bar prod-rg/web01 prod-rg/web02
+  #
+  # Typical usage within bash-my-azure functions:
+  #
+  #     local vm_ids=($(skim-stdin "$@"))  # Append to arg list
+  #     local vm_ids=$(skim-stdin)       # Only draw from STDIN
+
+  [[ "${1:-}" == --help ]] && __bmaz_help && return 0
+
+  local skimmed_stdin="$([[ -t 0 ]] || awk 'ORS=" " { print $1 }')"
+
+  printf -- '%s %s' "$*" "$skimmed_stdin" |
+    awk '{$1=$1;print}'  # trim leading/trailing spaces
+}
+
+
+columnise() {
+  if [[ $BMAZ_COLUMNISE_ONLY_WHEN_TERMINAL_PRESENT == 'true' ]] && ! [[ -t 1 ]]; then
+    cat
+  else
+    column -t -s $'\t'
+  fi
+}
+
+
+__bmaz_read_filters() {
+
+  # Construct a string to be passed to `grep -E`
+  #
+  #     $ __bmaz_read_filters foo bar baz
+  #     foo|bar|baz
+
+  ( IFS=$'|'; printf '%s' "$*" )
+}
+
+
+__bmaz_help() {
+
+  # Print the doc-comment block of the calling function.
+  # Functions invoke this via:  [[ "$1" == --help ]] && __bmaz_help && return 0
+
+  local fn="${FUNCNAME[1]}"
+  local home="${BMAZ_HOME:-$HOME/.bash-my-azure}"
+  awk -v fn="$fn" '
+    $0 ~ "^" fn "\\(\\) \\{" { infn = 1; next }
+    infn && /^[[:space:]]*#/  { found = 1; sub(/^[[:space:]]*#[[:space:]]?/, ""); print; next }
+    infn && /^[[:space:]]*$/  { if (found) print ""; next }
+    infn                      { exit }
+  ' "$home"/lib/*-functions
+}
+
+
+__bmaz_error() {
+  echo "ERROR: $*" >&2
+  return 1
+}
+
+
+__bmaz_usage() {
+  echo "USAGE: ${FUNCNAME[1]} $*" >&2
+}
+
+
+__bmaz_parse_resource() {
+
+  # Parse rg/name token into RG and NAME
+  #
+  # Sets variables: _bmaz_rg, _bmaz_name
+  #
+  #     $ __bmaz_parse_resource "prod-rg/web01"
+  #     # _bmaz_rg=prod-rg  _bmaz_name=web01
+  #
+  #     $ BMAZ_DEFAULT_RG=prod-rg __bmaz_parse_resource "web01"
+  #     # _bmaz_rg=prod-rg  _bmaz_name=web01
+
+  local token="$1"
+  if [[ "$token" == */* ]]; then
+    _bmaz_rg="${token%%/*}"
+    _bmaz_name="${token#*/}"
+  elif [[ -n "$BMAZ_DEFAULT_RG" ]]; then
+    _bmaz_rg="$BMAZ_DEFAULT_RG"
+    _bmaz_name="$token"
+  else
+    __bmaz_error "Ambiguous name '$token'. Set BMAZ_DEFAULT_RG or use rg/name format."
+    return 1
+  fi
+}
+
+
+__bmaz_check_az_version() {
+
+  # Verify az CLI version meets minimum requirement (2.50.0)
+
+  local required="2.50.0"
+  local current
+  current=$(az version --query '"azure-cli"' -o tsv 2>/dev/null)
+
+  if [[ -z "$current" ]]; then
+    __bmaz_error "az CLI not found. Install: https://aka.ms/install-az"
+    return 1
+  fi
+
+  if [[ "$(printf '%s\n' "$required" "$current" | sort -V | head -1)" != "$required" ]]; then
+    __bmaz_error "az CLI $current too old. Need $required+. Run 'az upgrade'."
+    return 1
+  fi
+
+  echo "az CLI $current OK (>= $required)"
+}
+
+
+__bmaz_rg_arg() {
+
+  # Return --resource-group flag if BMAZ_DEFAULT_RG is set
+  # Used by listing fns to optionally scope to a RG
+
+  if [[ -n "$BMAZ_DEFAULT_RG" ]]; then
+    echo "--resource-group $BMAZ_DEFAULT_RG"
+  fi
+}

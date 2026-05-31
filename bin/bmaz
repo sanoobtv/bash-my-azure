@@ -1,0 +1,54 @@
+#!/usr/bin/env bash
+
+# bmaz
+#
+# Provides alternative to loading the functions into your shell environment.
+# Useful for calling a function from another process.
+#
+# e.g. env BMAZ_DEFAULT_RG=myRG bmaz vms
+#
+# Assumes you have installed bash-my-azure to standard location
+
+for f in "${BMAZ_HOME:-$HOME/.bash-my-azure}"/lib/*-functions; do source "$f"; done
+
+# Keep output pipeline-clean: no color codes, no upgrade/warning chatter on stdout
+export AZURE_CORE_NO_COLOR=${AZURE_CORE_NO_COLOR:-1}
+export AZURE_CORE_ONLY_SHOW_ERRORS=${AZURE_CORE_ONLY_SHOW_ERRORS:-1}
+
+# Version
+if [[ "$1" == "--version" ]]; then
+  cat "${BMAZ_HOME:-$HOME/.bash-my-azure}/VERSION" 2>/dev/null || echo "dev"
+  exit 0
+fi
+
+# Top-level help / no command
+if [[ $# -eq 0 || "$1" == "--help" || "$1" == "-h" ]]; then
+  cat <<'EOF'
+bash-my-azure — simple, pipe-friendly Azure CLI commands
+
+Usage:
+  bmaz <command> [args]     run a command (or call <command> directly once installed)
+  bmaz <command> --help     show help and examples for a command
+  bmaz --version            print version
+  bmaz --doctor             check az CLI + jq
+
+Commands:
+EOF
+  column -c 80 "${BMAZ_HOME:-$HOME/.bash-my-azure}/functions" 2>/dev/null ||
+    cat "${BMAZ_HOME:-$HOME/.bash-my-azure}/functions"
+  exit 0
+fi
+
+# Doctor check
+if [[ "$1" == "--doctor" ]]; then
+  __bmaz_check_az_version
+  rc=$?
+  if command -v jq &>/dev/null; then
+    echo "jq $(jq --version) OK"
+  else
+    echo "WARNING: jq not found — 'deployment-outputs' needs it. Install: https://jqlang.github.io/jq/"
+  fi
+  exit $rc
+fi
+
+"$@"

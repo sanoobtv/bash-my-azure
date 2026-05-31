@@ -1,0 +1,84 @@
+#!/bin/bash
+#
+# scripts/build
+#
+# Regenerate aliases, completions, functions list, and skills/SKILL.md command section.
+# Run after adding/modifying any lib/*-functions file.
+
+set -euo pipefail
+
+BMAZ_HOME="${BMAZ_HOME:-$(cd "$(dirname "$0")/.." && pwd)}"
+
+echo "Building bash-my-azure from: $BMAZ_HOME"
+
+# --- Extract all function names ---
+echo "Extracting function names..."
+grep -h '^[a-z][-a-z0-9_]*()' "$BMAZ_HOME"/lib/*-functions |
+  sed 's/() {//' |
+  sed 's/()//' |
+  sort > "$BMAZ_HOME/functions"
+
+echo "  Found $(wc -l < "$BMAZ_HOME/functions" | tr -d ' ') functions"
+
+# --- Generate aliases ---
+echo "Generating aliases..."
+{
+  echo '# DO NOT MANUALLY MODIFY THIS FILE.'
+  echo '# Use '\''scripts/build'\'' to regenerate if required.'
+  echo ''
+  while read -r fn; do
+    echo "alias ${fn}='\${BMAZ_HOME:-\$HOME/.bash-my-azure}/bin/bmaz ${fn}'"
+  done < "$BMAZ_HOME/functions"
+} > "$BMAZ_HOME/aliases"
+
+echo "  Generated $(wc -l < "$BMAZ_HOME/aliases" | tr -d ' ') aliases"
+
+# --- Generate completions ---
+echo "Generating bash completions..."
+{
+  echo '# DO NOT MANUALLY MODIFY THIS FILE.'
+  echo '# Use '\''scripts/build'\'' to regenerate if required.'
+  echo ''
+  echo '# Complete bmaz with all function names'
+  echo '_bmaz_completions() {'
+  echo '  local cur="${COMP_WORDS[COMP_CWORD]}"'
+  echo '  local commands="$(cat "${BMAZ_HOME:-$HOME/.bash-my-azure}/functions")"'
+  echo '  COMPREPLY=($(compgen -W "$commands" -- "$cur"))'
+  echo '}'
+  echo 'complete -F _bmaz_completions bmaz'
+  echo ''
+  echo '# Complete individual commands that accept resource group names'
+  echo '_bmaz_rg_completions() {'
+  echo '  local cur="${COMP_WORDS[COMP_CWORD]}"'
+  echo '  local rgs="$(az group list --query "[].name" -o tsv 2>/dev/null)"'
+  echo '  COMPREPLY=($(compgen -W "$rgs" -- "$cur"))'
+  echo '}'
+  echo ''
+  # RG-accepting commands
+  for fn in rg-resources rg-delete; do
+    echo "complete -F _bmaz_rg_completions $fn"
+  done
+} > "$BMAZ_HOME/bash_completion.sh"
+
+echo "  Done"
+
+# --- Build SKILL.md command list (if markers exist) ---
+SKILL_FILE="$BMAZ_HOME/skills/SKILL.md"
+if [[ -f "$SKILL_FILE" ]] && grep -q 'COMMANDS-START' "$SKILL_FILE"; then
+  echo "Regenerating skills/SKILL.md command list..."
+  {
+    sed '/<!-- COMMANDS-START -->/q' "$SKILL_FILE"
+    echo ""
+    for f in "$BMAZ_HOME"/lib/*-functions; do
+      group=$(basename "$f" | sed 's/-functions//')
+      echo "### $group"
+      grep -E '^[a-z][-a-z0-9_]*\(\)' "$f" | sed 's/() {//' | sed 's/()//' | sed 's/^/- `/' | sed 's/$/`/'
+      echo ""
+    done
+    sed -n '/<!-- COMMANDS-END -->/,$p' "$SKILL_FILE"
+  } > "$SKILL_FILE.tmp" && mv "$SKILL_FILE.tmp" "$SKILL_FILE"
+  echo "  Done"
+fi
+
+echo ""
+echo "Build complete. Reload shell or: source ${BMAZ_HOME}/aliases"

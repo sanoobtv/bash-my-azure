@@ -1,0 +1,24 @@
+# shellcheck configuration for bash-my-azure
+#
+# These are disabled because they conflict with intentional, load-bearing
+# patterns in this codebase — not to paper over bugs. Everything else
+# (quoting, printf-format, glob, exit-code) stays ON.
+
+# SC2155: `local x=$(...)` — declare+assign in one line. Pervasive house style.
+disable=SC2155
+
+# SC2206/SC2207: building arrays via word-split of $(skim-stdin ...). This IS
+# the pipe-skimming pattern; mapfile would change behavior.
+disable=SC2206
+disable=SC2207
+
+# SC1090/SC1091: dynamic `source "$f"` paths (bin/bmaz, install.sh).
+disable=SC1090
+disable=SC1091
+
+# SC2154: _bmaz_rg / _bmaz_name are set by the shared helper __bmaz_parse_resource;
+# shellcheck can't see the cross-function assignment.
+disable=SC2154
+
+# SC2016: scripts/build intentionally emits shell code as single-quoted literals.
+disable=SC2016

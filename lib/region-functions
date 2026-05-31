@@ -1,0 +1,37 @@
+#!/bin/bash
+#
+# region-functions
+#
+# List Azure regions/locations
+
+regions() {
+
+  # List Azure regions
+  #
+  #     $ regions
+  #     australiaeast       Australia East        (Asia Pacific)
+  #     eastus              East US               (US)
+  #     westeurope          West Europe           (Europe)
+  #
+  # *Optionally provide a filter string:*
+  #
+  #     $ regions australia
+  #     australiaeast       Australia East        (Asia Pacific)
+  #     australiasoutheast  Australia Southeast   (Asia Pacific)
+  #     australiacentral    Australia Central     (Asia Pacific)
+
+  [[ "${1:-}" == --help ]] && __bmaz_help && return 0
+
+  local filters=$(__bmaz_read_filters "$@")
+
+  az account list-locations \
+    --output tsv            \
+    --query "[].{
+      Name:name,
+      DisplayName:displayName,
+      Geo:metadata.geographyGroup
+    }" |
+  grep -E -- "$filters" |
+  LC_ALL=C sort -t$'\t' -k 1 |
+    columnise
+}

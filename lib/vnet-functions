@@ -1,0 +1,106 @@
+#!/bin/bash
+#
+# vnet-functions
+#
+# List and inspect Azure Virtual Networks and Subnets
+
+vnets() {
+
+  # List Virtual Networks
+  #
+  #     $ vnets
+  #     prod-rg/prod-vnet   10.0.0.0/16   eastus     Succeeded
+  #     dev-rg/dev-vnet     10.1.0.0/16   westus2    Succeeded
+  #
+  # *Optionally provide a filter string:*
+  #
+  #     $ vnets prod
+  #     prod-rg/prod-vnet  10.0.0.0/16  eastus  Succeeded
+
+  [[ "${1:-}" == --help ]] && __bmaz_help && return 0
+
+  local filters=$(__bmaz_read_filters "$@")
+
+  local rg_args=()
+  [[ -n "$BMAZ_DEFAULT_RG" ]] && rg_args=(--resource-group "$BMAZ_DEFAULT_RG")
+
+  az network vnet list "${rg_args[@]}" \
+    --output tsv                \
+    --query "[].{
+      Id:join('/', [resourceGroup, name]),
+      AddressSpace:addressSpace.addressPrefixes[0],
+      Location:location,
+      State:provisioningState
+    }" |
+  grep -E -- "$filters" |
+  LC_ALL=C sort -t$'\t' -k 1 |
+    columnise
+}
+
+
+subnets() {
+
+  # List all subnets across VNets (or within BMAZ_DEFAULT_RG)
+  #
+  #     $ subnets
+  #     prod-rg/prod-vnet/default      10.0.0.0/24   Succeeded
+  #     prod-rg/prod-vnet/app-subnet   10.0.1.0/24   Succeeded
+
+  [[ "${1:-}" == --help ]] && __bmaz_help && return 0
+
+  local filters=$(__bmaz_read_filters "$@")
+
+  local rg_args=()
+  [[ -n "$BMAZ_DEFAULT_RG" ]] && rg_args=(--resource-group "$BMAZ_DEFAULT_RG")
+
+  # Subnets require iterating vnets (no flat list command)
+  local vnets_list
+  vnets_list=$(az network vnet list "${rg_args[@]}" --query "[].{RG:resourceGroup, Name:name}" -o tsv)
+
+  while IFS=$'\t' read -r rg vnet_name; do
+    [[ -z "$rg" ]] && continue
+    az network vnet subnet list     \
+      --resource-group "$rg"        \
+      --vnet-name "$vnet_name"      \
+      --output tsv                  \
+      --query "[].{
+        Id:join('/', ['$rg', '$vnet_name', name]),
+        Prefix:addressPrefix,
+        State:provisioningState
+      }"
+  done <<< "$vnets_list" |
+  grep -E -- "$filters" |
+    columnise
+}
+
+
+vnet-subnets() {
+
+  # List subnets for specific VNet(s)
+  #
+  #     USAGE: vnet-subnets rg/vnet-name [rg/vnet-name]
+  #
+  #     $ vnets | grep prod | vnet-subnets
+  #     prod-rg/prod-vnet/default      10.0.0.0/24  Succeeded
+  #     prod-rg/prod-vnet/app-subnet   10.0.1.0/24  Succeeded
+
+  [[ "${1:-}" == --help ]] && __bmaz_help && return 0
+
+  local vnet_ids=($(skim-stdin "$@"))
+  [[ ${#vnet_ids[@]} -eq 0 ]] && __bmaz_usage "rg/vnet-name [rg/vnet-name]" && return 1
+
+  local vnet_id
+  for vnet_id in "${vnet_ids[@]}"; do
+    __bmaz_parse_resource "$vnet_id" || return 1
+    az network vnet subnet list      \
+      --resource-group "$_bmaz_rg"   \
+      --vnet-name "$_bmaz_name"      \
+      --output tsv                   \
+      --query "[].{
+        Id:join('/', ['$_bmaz_rg', '$_bmaz_name', name]),
+        Prefix:addressPrefix,
+        State:provisioningState
+      }"
+  done |
+    columnise
+}

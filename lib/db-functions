@@ -1,0 +1,214 @@
+#!/bin/bash
+#
+# db-functions
+#
+# List Azure managed database servers and databases
+# Covers: Azure SQL, PostgreSQL Flexible Server, MySQL Flexible Server, Cosmos DB
+
+sql-servers() {
+
+  # List Azure SQL Servers
+  #
+  #     $ sql-servers
+  #     prod-rg/sqlsrv-prod   australiaeast  Ready  sqladmin
+  #     dev-rg/sqlsrv-dev     australiaeast  Ready  sqladmin
+  #
+  # *Optionally provide a filter string:*
+  #
+  #     $ sql-servers prod
+  #     prod-rg/sqlsrv-prod  australiaeast  Ready  sqladmin
+
+  [[ "${1:-}" == --help ]] && __bmaz_help && return 0
+
+  local filters=$(__bmaz_read_filters "$@")
+
+  local rg_args=()
+  [[ -n "$BMAZ_DEFAULT_RG" ]] && rg_args=(--resource-group "$BMAZ_DEFAULT_RG")
+
+  az sql server list "${rg_args[@]}" \
+    --output tsv                     \
+    --query "[].{
+      Id:join('/', [resourceGroup, name]),
+      Location:location,
+      State:state,
+      Admin:administratorLogin
+    }" |
+  grep -E -- "$filters" |
+  LC_ALL=C sort -t$'\t' -k 1 |
+    columnise
+}
+
+
+sql-databases() {
+
+  # List databases on Azure SQL Server(s)
+  #
+  #     USAGE: sql-databases rg/server-name [rg/server-name]
+  #
+  #     $ sql-servers | sql-databases
+  #     prod-rg/sqlsrv-prod  appdb       S1           Online  5GB
+  #     prod-rg/sqlsrv-prod  analytics   S2           Online  20GB
+  #     dev-rg/sqlsrv-dev    appdb-dev   Basic        Online  2GB
+
+  [[ "${1:-}" == --help ]] && __bmaz_help && return 0
+
+  local server_ids=($(skim-stdin "$@"))
+  [[ ${#server_ids[@]} -eq 0 ]] && __bmaz_usage "rg/server-name [rg/server-name]" && return 1
+
+  local server_id
+  for server_id in "${server_ids[@]}"; do
+    __bmaz_parse_resource "$server_id" || return 1
+    az sql db list                         \
+      --resource-group "$_bmaz_rg"         \
+      --server "$_bmaz_name"               \
+      --output tsv                         \
+      --query "[?name!='master'].{
+        Server:'$server_id',
+        Name:name,
+        Sku:currentSku.name,
+        Status:status,
+        MaxSize:maxSizeBytes
+      }"
+  done |
+  LC_ALL=C sort -t$'\t' -k 1 |
+    columnise
+}
+
+
+postgres-servers() {
+
+  # List PostgreSQL Flexible Servers
+  #
+  #     $ postgres-servers
+  #     prod-rg/pg-prod   australiaeast  Ready  16  GeneralPurpose
+  #     dev-rg/pg-dev     australiaeast  Ready  8   Burstable
+  #
+  # *Optionally provide a filter string:*
+  #
+  #     $ postgres-servers prod
+  #     prod-rg/pg-prod  australiaeast  Ready  16  GeneralPurpose
+
+  [[ "${1:-}" == --help ]] && __bmaz_help && return 0
+
+  local filters=$(__bmaz_read_filters "$@")
+
+  local rg_args=()
+  [[ -n "$BMAZ_DEFAULT_RG" ]] && rg_args=(--resource-group "$BMAZ_DEFAULT_RG")
+
+  az postgres flexible-server list "${rg_args[@]}" \
+    --output tsv                                   \
+    --query "[].{
+      Id:join('/', [resourceGroup, name]),
+      Location:location,
+      State:state,
+      Version:version,
+      Tier:sku.tier
+    }" |
+  grep -E -- "$filters" |
+  LC_ALL=C sort -t$'\t' -k 1 |
+    columnise
+}
+
+
+postgres-databases() {
+
+  # List databases on PostgreSQL Flexible Server(s)
+  #
+  #     USAGE: postgres-databases rg/server-name [rg/server-name]
+  #
+  #     $ postgres-servers | postgres-databases
+  #     prod-rg/pg-prod  appdb      UTF8
+  #     prod-rg/pg-prod  analytics  UTF8
+  #     dev-rg/pg-dev    appdb-dev  UTF8
+
+  [[ "${1:-}" == --help ]] && __bmaz_help && return 0
+
+  local server_ids=($(skim-stdin "$@"))
+  [[ ${#server_ids[@]} -eq 0 ]] && __bmaz_usage "rg/server-name [rg/server-name]" && return 1
+
+  local server_id
+  for server_id in "${server_ids[@]}"; do
+    __bmaz_parse_resource "$server_id" || return 1
+    az postgres flexible-server db list    \
+      --resource-group "$_bmaz_rg"         \
+      --server-name "$_bmaz_name"          \
+      --output tsv                         \
+      --query "[?name!='azure_maintenance' && name!='azure_sys'].{
+        Server:'$server_id',
+        Name:name,
+        Charset:charset
+      }"
+  done |
+  LC_ALL=C sort -t$'\t' -k 1 |
+    columnise
+}
+
+
+mysql-servers() {
+
+  # List MySQL Flexible Servers
+  #
+  #     $ mysql-servers
+  #     prod-rg/mysql-prod  australiaeast  Ready  8.0.36  GeneralPurpose
+  #     dev-rg/mysql-dev    australiaeast  Ready  8.0.36  Burstable
+  #
+  # *Optionally provide a filter string:*
+  #
+  #     $ mysql-servers prod
+  #     prod-rg/mysql-prod  australiaeast  Ready  8.0.36  GeneralPurpose
+
+  [[ "${1:-}" == --help ]] && __bmaz_help && return 0
+
+  local filters=$(__bmaz_read_filters "$@")
+
+  local rg_args=()
+  [[ -n "$BMAZ_DEFAULT_RG" ]] && rg_args=(--resource-group "$BMAZ_DEFAULT_RG")
+
+  az mysql flexible-server list "${rg_args[@]}" \
+    --output tsv                                \
+    --query "[].{
+      Id:join('/', [resourceGroup, name]),
+      Location:location,
+      State:state,
+      Version:version,
+      Tier:sku.tier
+    }" |
+  grep -E -- "$filters" |
+  LC_ALL=C sort -t$'\t' -k 1 |
+    columnise
+}
+
+
+cosmosdb-accounts() {
+
+  # List Cosmos DB Accounts
+  #
+  #     $ cosmosdb-accounts
+  #     prod-rg/cosmos-prod  australiaeast  GlobalDocumentDB  Succeeded  Session
+  #     dev-rg/cosmos-dev    australiaeast  GlobalDocumentDB  Succeeded  Eventual
+  #
+  # *Optionally provide a filter string:*
+  #
+  #     $ cosmosdb-accounts prod
+  #     prod-rg/cosmos-prod  australiaeast  GlobalDocumentDB  Succeeded  Session
+
+  [[ "${1:-}" == --help ]] && __bmaz_help && return 0
+
+  local filters=$(__bmaz_read_filters "$@")
+
+  local rg_args=()
+  [[ -n "$BMAZ_DEFAULT_RG" ]] && rg_args=(--resource-group "$BMAZ_DEFAULT_RG")
+
+  az cosmosdb list "${rg_args[@]}" \
+    --output tsv                   \
+    --query "[].{
+      Id:join('/', [resourceGroup, name]),
+      Location:locations[0].locationName,
+      Kind:databaseAccountOfferType,
+      State:provisioningState,
+      Consistency:consistencyPolicy.defaultConsistencyLevel
+    }" |
+  grep -E -- "$filters" |
+  LC_ALL=C sort -t$'\t' -k 1 |
+    columnise
+}

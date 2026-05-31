@@ -1,0 +1,76 @@
+#!/bin/bash
+#
+# nsg-functions
+#
+# List and inspect Azure Network Security Groups and their rules
+
+nsgs() {
+
+  # List Network Security Groups
+  #
+  #     $ nsgs
+  #     prod-rg/web-nsg     eastus     Succeeded
+  #     prod-rg/db-nsg      eastus     Succeeded
+  #     dev-rg/dev-nsg      westus2    Succeeded
+  #
+  # *Optionally provide a filter string:*
+  #
+  #     $ nsgs web
+  #     prod-rg/web-nsg  eastus  Succeeded
+
+  [[ "${1:-}" == --help ]] && __bmaz_help && return 0
+
+  local filters=$(__bmaz_read_filters "$@")
+
+  local rg_args=()
+  [[ -n "$BMAZ_DEFAULT_RG" ]] && rg_args=(--resource-group "$BMAZ_DEFAULT_RG")
+
+  az network nsg list "${rg_args[@]}" \
+    --output tsv               \
+    --query "[].{
+      Id:join('/', [resourceGroup, name]),
+      Location:location,
+      State:provisioningState
+    }" |
+  grep -E -- "$filters" |
+  LC_ALL=C sort -t$'\t' -k 1 |
+    columnise
+}
+
+
+nsg-rules() {
+
+  # List rules for NSG(s)
+  #
+  #     USAGE: nsg-rules rg/nsg-name [rg/nsg-name]
+  #
+  #     $ nsgs | grep web | nsg-rules
+  #     AllowSSH        Inbound   Allow  100  Tcp  22    *
+  #     AllowHTTPS      Inbound   Allow  110  Tcp  443   *
+  #     DenyAllInbound  Inbound   Deny   4096 *    *     *
+
+  [[ "${1:-}" == --help ]] && __bmaz_help && return 0
+
+  local nsg_ids=($(skim-stdin "$@"))
+  [[ ${#nsg_ids[@]} -eq 0 ]] && __bmaz_usage "rg/nsg-name [rg/nsg-name]" && return 1
+
+  local nsg_id
+  for nsg_id in "${nsg_ids[@]}"; do
+    __bmaz_parse_resource "$nsg_id" || return 1
+    az network nsg rule list         \
+      --resource-group "$_bmaz_rg"   \
+      --nsg-name "$_bmaz_name"       \
+      --output tsv                   \
+      --query "[].{
+        Name:name,
+        Direction:direction,
+        Access:access,
+        Priority:priority,
+        Protocol:protocol,
+        DestPort:destinationPortRange,
+        Source:sourceAddressPrefix
+      }" |
+    LC_ALL=C sort -t$'\t' -k 4 -n
+  done |
+    columnise
+}

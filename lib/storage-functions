@@ -1,0 +1,105 @@
+#!/bin/bash
+#
+# storage-functions
+#
+# List and inspect Azure Storage Accounts, Blob Containers, and Blobs
+
+storage-accounts() {
+
+  # List Storage Accounts
+  #
+  #     $ storage-accounts
+  #     prod-rg/prodstore01   eastus     StorageV2  Standard_LRS  Succeeded
+  #     dev-rg/devstore01     westus2    StorageV2  Standard_LRS  Succeeded
+  #
+  # *Optionally provide a filter string:*
+  #
+  #     $ storage-accounts prod
+  #     prod-rg/prodstore01  eastus  StorageV2  Standard_LRS  Succeeded
+
+  [[ "${1:-}" == --help ]] && __bmaz_help && return 0
+
+  local filters=$(__bmaz_read_filters "$@")
+
+  local rg_args=()
+  [[ -n "$BMAZ_DEFAULT_RG" ]] && rg_args=(--resource-group "$BMAZ_DEFAULT_RG")
+
+  az storage account list "${rg_args[@]}" \
+    --output tsv                   \
+    --query "[].{
+      Id:join('/', [resourceGroup, name]),
+      Location:primaryLocation,
+      Kind:kind,
+      Sku:sku.name,
+      State:provisioningState
+    }" 2>/dev/null |
+  grep -E -- "$filters" |
+  LC_ALL=C sort -t$'\t' -k 1 |
+    columnise
+}
+
+
+blob-containers() {
+
+  # List blob containers in storage account(s)
+  #
+  #     USAGE: blob-containers rg/storage-account-name [rg/storage-account-name]
+  #
+  #     $ storage-accounts | grep prod | blob-containers
+  #     $web         lease:unlocked
+  #     backups      lease:unlocked
+  #     data         lease:unlocked
+
+  [[ "${1:-}" == --help ]] && __bmaz_help && return 0
+
+  local sa_ids=($(skim-stdin "$@"))
+  [[ ${#sa_ids[@]} -eq 0 ]] && __bmaz_usage "rg/storage-account-name" && return 1
+
+  local sa_id
+  for sa_id in "${sa_ids[@]}"; do
+    __bmaz_parse_resource "$sa_id" || return 1
+    az storage container list            \
+      --account-name "$_bmaz_name"       \
+      --auth-mode login                  \
+      --output tsv                       \
+      --query "[].{
+        Name:name,
+        LeaseStatus:properties.leaseStatus
+      }" 2>/dev/null
+  done |
+    columnise
+}
+
+
+blob-container-blobs() {
+
+  # List blobs in a container
+  #
+  #     USAGE: blob-container-blobs storage-account container-name
+  #
+  #     $ blob-container-blobs prodstore01 backups
+  #     db-backup-2026-01.sql.gz  2026-01-15T03:00:00  1.2GB
+  #     db-backup-2026-02.sql.gz  2026-02-15T03:00:00  1.3GB
+
+  [[ "${1:-}" == --help ]] && __bmaz_help && return 0
+
+  local account_name="$1"
+  local container_name="$2"
+  [[ -z $account_name || -z $container_name ]] && \
+    __bmaz_usage "storage-account-name container-name" && return 1
+
+  local filters=$(__bmaz_read_filters "${@:3}")
+
+  az storage blob list                \
+    --account-name "$account_name"    \
+    --container-name "$container_name" \
+    --auth-mode login                 \
+    --output tsv                      \
+    --query "[].{
+      Name:name,
+      Modified:properties.lastModified,
+      Size:properties.contentLength
+    }" |
+  grep -E -- "$filters" |
+    columnise
+}

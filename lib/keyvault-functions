@@ -1,0 +1,69 @@
+#!/bin/bash
+#
+# keyvault-functions
+#
+# List and inspect Azure Key Vaults and keys
+
+keyvaults() {
+
+  # List Key Vaults
+  #
+  #     $ keyvaults
+  #     prod-rg/kv-prod    australiaeast  Succeeded  standard
+  #     dev-rg/kv-dev      australiaeast  Succeeded  standard
+  #
+  # *Optionally provide a filter string:*
+  #
+  #     $ keyvaults prod
+  #     prod-rg/kv-prod  australiaeast  Succeeded  standard
+
+  [[ "${1:-}" == --help ]] && __bmaz_help && return 0
+
+  local filters=$(__bmaz_read_filters "$@")
+
+  local rg_args=()
+  [[ -n "$BMAZ_DEFAULT_RG" ]] && rg_args=(--resource-group "$BMAZ_DEFAULT_RG")
+
+  az keyvault list "${rg_args[@]}" \
+    --output tsv                   \
+    --query "[].{
+      Id:join('/', [resourceGroup, name]),
+      Location:location,
+      State:properties.provisioningState,
+      Sku:properties.sku.name
+    }" |
+  grep -E -- "$filters" |
+  LC_ALL=C sort -t$'\t' -k 1 |
+    columnise
+}
+
+
+keyvault-keys() {
+
+  # List keys in a Key Vault
+  #
+  #     USAGE: keyvault-keys vault-name [vault-name]
+  #
+  #     $ keyvaults | keyvault-keys
+  #     https://kv-prod.vault.azure.net/keys/encryption-key  true   RSA   2048
+
+  [[ "${1:-}" == --help ]] && __bmaz_help && return 0
+
+  local vault_ids=($(skim-stdin "$@"))
+  [[ ${#vault_ids[@]} -eq 0 ]] && __bmaz_usage "rg/vault-name [rg/vault-name]" && return 1
+
+  local vault_id
+  for vault_id in "${vault_ids[@]}"; do
+    __bmaz_parse_resource "$vault_id" || return 1
+    az keyvault key list                 \
+      --vault-name "$_bmaz_name"         \
+      --output tsv                       \
+      --query "[].{
+        Id:kid,
+        Enabled:attributes.enabled,
+        KeyType:kty,
+        KeySize:keySize
+      }" 2>/dev/null
+  done |
+    columnise
+}

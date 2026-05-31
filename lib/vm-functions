@@ -1,0 +1,298 @@
+#!/bin/bash
+#
+# vm-functions
+#
+# List, start, stop, deallocate, and ssh to Azure Virtual Machines
+
+vms() {
+
+  # List Virtual Machines
+  #
+  #     $ vms
+  #     prod-rg/web01  Standard_B2s  running       eastus
+  #     prod-rg/web02  Standard_B2s  running       eastus
+  #     dev-rg/dev01   Standard_B1s  deallocated   westus2
+  #
+  # With BMAZ_DEFAULT_RG set, shows short names:
+  #
+  #     $ BMAZ_DEFAULT_RG=prod-rg vms
+  #     web01  Standard_B2s  running  eastus
+  #     web02  Standard_B2s  running  eastus
+  #
+  # *Optionally provide a filter string:*
+  #
+  #     $ vms web
+  #     prod-rg/web01  Standard_B2s  running  eastus
+  #     prod-rg/web02  Standard_B2s  running  eastus
+
+  [[ "${1:-}" == --help ]] && __bmaz_help && return 0
+
+  local filters=$(__bmaz_read_filters "$@")
+
+  local rg_args=()
+  [[ -n "$BMAZ_DEFAULT_RG" ]] && rg_args=(--resource-group "$BMAZ_DEFAULT_RG")
+
+  az vm list "${rg_args[@]}"  \
+    --show-details            \
+    --output tsv              \
+    --query "[].{
+      Id:join('/', [resourceGroup, name]),
+      Size:hardwareProfile.vmSize,
+      PowerState:powerState,
+      Location:location
+    }" |
+  grep -E -- "$filters" |
+  LC_ALL=C sort -t$'\t' -k 1 |
+    columnise
+}
+
+
+vm-status() {
+
+  # Show power state of VM(s)
+  #
+  #     USAGE: vm-status rg/name [rg/name]
+  #
+  #     $ vms | vm-status
+  #     prod-rg/web01  VM running
+  #     prod-rg/web02  VM running
+
+  [[ "${1:-}" == --help ]] && __bmaz_help && return 0
+
+  local vm_ids=($(skim-stdin "$@"))
+  [[ ${#vm_ids[@]} -eq 0 ]] && __bmaz_usage "rg/name [rg/name]" && return 1
+
+  local vm_id
+  for vm_id in "${vm_ids[@]}"; do
+    __bmaz_parse_resource "$vm_id" || return 1
+    az vm get-instance-view          \
+      --resource-group "$_bmaz_rg"   \
+      --name "$_bmaz_name"           \
+      --output tsv                   \
+      --query "{
+        Id:'$vm_id',
+        Status:instanceView.statuses[1].displayStatus
+      }"
+  done |
+    columnise
+}
+
+
+vm-ip() {
+
+  # List IP addresses of VM(s)
+  #
+  #     USAGE: vm-ip rg/name [rg/name]
+  #
+  #     $ vms | vm-ip
+  #     prod-rg/web01  10.0.1.4  20.53.123.45
+  #     prod-rg/web02  10.0.1.5  20.53.123.46
+
+  [[ "${1:-}" == --help ]] && __bmaz_help && return 0
+
+  local vm_ids=($(skim-stdin "$@"))
+  [[ ${#vm_ids[@]} -eq 0 ]] && __bmaz_usage "rg/name [rg/name]" && return 1
+
+  local vm_id
+  for vm_id in "${vm_ids[@]}"; do
+    __bmaz_parse_resource "$vm_id" || return 1
+    local ips
+    ips=$(az vm list-ip-addresses     \
+      --resource-group "$_bmaz_rg"    \
+      --name "$_bmaz_name"            \
+      --output tsv                    \
+      --query "[].{
+        Private:virtualMachine.network.privateIpAddresses[0],
+        Public:virtualMachine.network.publicIpAddresses[0].ipAddress
+      }")
+    printf '%s\t%s\n' "$vm_id" "$ips"
+  done |
+    columnise
+}
+
+
+vm-start() {
+
+  # Start VM(s)
+  #
+  #     USAGE: vm-start rg/name [rg/name]
+  #
+  #     $ vms | grep dev | vm-start
+  #     Starting dev-rg/dev01...
+
+  [[ "${1:-}" == --help ]] && __bmaz_help && return 0
+
+  local vm_ids=($(skim-stdin "$@"))
+  [[ ${#vm_ids[@]} -eq 0 ]] && __bmaz_usage "rg/name [rg/name]" && return 1
+
+  local vm_id
+  for vm_id in "${vm_ids[@]}"; do
+    __bmaz_parse_resource "$vm_id" || return 1
+    echo "Starting $vm_id..."
+    az vm start                      \
+      --resource-group "$_bmaz_rg"   \
+      --name "$_bmaz_name"           \
+      --no-wait
+  done
+}
+
+
+vm-stop() {
+
+  # Stop VM(s) (OS-level shutdown, still billing)
+  #
+  #     USAGE: vm-stop rg/name [rg/name]
+  #
+  #     $ vms | grep web | vm-stop
+  #     Stopping prod-rg/web01...
+  #     Stopping prod-rg/web02...
+
+  [[ "${1:-}" == --help ]] && __bmaz_help && return 0
+
+  local vm_ids=($(skim-stdin "$@"))
+  [[ ${#vm_ids[@]} -eq 0 ]] && __bmaz_usage "rg/name [rg/name]" && return 1
+
+  local vm_id
+  for vm_id in "${vm_ids[@]}"; do
+    __bmaz_parse_resource "$vm_id" || return 1
+    echo "Stopping $vm_id..."
+    az vm stop                       \
+      --resource-group "$_bmaz_rg"   \
+      --name "$_bmaz_name"           \
+      --no-wait
+  done
+}
+
+
+vm-deallocate() {
+
+  # Deallocate VM(s) (no billing)
+  #
+  #     USAGE: vm-deallocate rg/name [rg/name]
+  #
+  #     $ vms | grep dev | vm-deallocate
+  #     Deallocating dev-rg/dev01...
+
+  [[ "${1:-}" == --help ]] && __bmaz_help && return 0
+
+  local vm_ids=($(skim-stdin "$@"))
+  [[ ${#vm_ids[@]} -eq 0 ]] && __bmaz_usage "rg/name [rg/name]" && return 1
+
+  local vm_id
+  for vm_id in "${vm_ids[@]}"; do
+    __bmaz_parse_resource "$vm_id" || return 1
+    echo "Deallocating $vm_id..."
+    az vm deallocate                 \
+      --resource-group "$_bmaz_rg"   \
+      --name "$_bmaz_name"           \
+      --no-wait
+  done
+}
+
+
+vm-restart() {
+
+  # Restart VM(s)
+  #
+  #     USAGE: vm-restart rg/name [rg/name]
+
+  [[ "${1:-}" == --help ]] && __bmaz_help && return 0
+
+  local vm_ids=($(skim-stdin "$@"))
+  [[ ${#vm_ids[@]} -eq 0 ]] && __bmaz_usage "rg/name [rg/name]" && return 1
+
+  local vm_id
+  for vm_id in "${vm_ids[@]}"; do
+    __bmaz_parse_resource "$vm_id" || return 1
+    echo "Restarting $vm_id..."
+    az vm restart                    \
+      --resource-group "$_bmaz_rg"   \
+      --name "$_bmaz_name"           \
+      --no-wait
+  done
+}
+
+
+vm-ssh() {
+
+  # SSH into a VM (uses first public IP, falls back to private IP)
+  #
+  #     USAGE: vm-ssh rg/name
+  #
+  #     $ vms | grep web01 | vm-ssh
+
+  [[ "${1:-}" == --help ]] && __bmaz_help && return 0
+
+  local vm_ids=($(skim-stdin "$@"))
+  [[ ${#vm_ids[@]} -eq 0 ]] && __bmaz_usage "rg/name" && return 1
+
+  # Only SSH to first VM (bash arrays are 0-indexed; bmaz always runs under bash)
+  local vm_id="${vm_ids[0]}"
+  __bmaz_parse_resource "$vm_id" || return 1
+
+  local ip
+  ip=$(az vm list-ip-addresses          \
+    --resource-group "$_bmaz_rg"         \
+    --name "$_bmaz_name"                 \
+    --query "[0].virtualMachine.network.publicIpAddresses[0].ipAddress" \
+    --output tsv)
+
+  # Fallback to private IP if no public
+  if [[ -z "$ip" || "$ip" == "None" ]]; then
+    ip=$(az vm list-ip-addresses         \
+      --resource-group "$_bmaz_rg"       \
+      --name "$_bmaz_name"               \
+      --query "[0].virtualMachine.network.privateIpAddresses[0]" \
+      --output tsv)
+  fi
+
+  [[ -z "$ip" || "$ip" == "None" ]] && __bmaz_error "No IP found for $vm_id" && return 1
+
+  local user
+  user=$(az vm show                      \
+    --resource-group "$_bmaz_rg"         \
+    --name "$_bmaz_name"                 \
+    --query "osProfile.adminUsername"    \
+    --output tsv)
+
+  echo "Connecting to $vm_id ($ip) as $user..."
+  ssh "${user}@${ip}"
+}
+
+
+vm-delete() {
+
+  # Delete VM(s) (with confirmation)
+  #
+  #     USAGE: vm-delete rg/name [rg/name]
+  #
+  #     $ vms | grep test | vm-delete
+  #     You are about to delete the following VMs:
+  #       dev-rg/test01
+  #     Are you sure you want to continue? y
+
+  [[ "${1:-}" == --help ]] && __bmaz_help && return 0
+
+  local vm_ids=($(skim-stdin "$@"))
+  [[ ${#vm_ids[@]} -eq 0 ]] && __bmaz_usage "rg/name [rg/name]" && return 1
+
+  echo "You are about to delete the following VMs:"
+  for vm_id in "${vm_ids[@]}"; do
+    echo "  $vm_id"
+  done
+
+  [ -t 0 ] || exec </dev/tty # reattach keyboard to STDIN
+  local regex_yes="^[Yy]$"
+  read -p "Are you sure you want to continue? " -n 1 -r
+  echo
+  if [[ $REPLY =~ $regex_yes ]]; then
+    for vm_id in "${vm_ids[@]}"; do
+      __bmaz_parse_resource "$vm_id" || return 1
+      echo "Deleting $vm_id..."
+      az vm delete                     \
+        --resource-group "$_bmaz_rg"   \
+        --name "$_bmaz_name"           \
+        --yes --no-wait
+    done
+  fi
+}

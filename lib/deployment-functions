@@ -1,0 +1,195 @@
+#!/bin/bash
+#
+# deployment-functions
+#
+# List, inspect, and manage Azure ARM/Bicep deployments
+
+deployments() {
+
+  # List ARM/Bicep deployments in resource group
+  #
+  #     $ deployments
+  #     prod-rg/web-deploy      Succeeded   2026-05-20T10:30:00Z  Microsoft.Resources/deployments
+  #     prod-rg/infra-deploy    Succeeded   2026-05-18T08:15:00Z  Microsoft.Resources/deployments
+  #     dev-rg/test-deploy      Failed      2026-05-17T14:00:00Z  Microsoft.Resources/deployments
+  #
+  # *Optionally provide a filter string:*
+  #
+  #     $ deployments prod
+  #     prod-rg/web-deploy    Succeeded  2026-05-20T10:30:00Z  Microsoft.Resources/deployments
+  #     prod-rg/infra-deploy  Succeeded  2026-05-18T08:15:00Z  Microsoft.Resources/deployments
+
+  [[ "${1:-}" == --help ]] && __bmaz_help && return 0
+
+  local filters=$(__bmaz_read_filters "$@")
+
+  local rg="${BMAZ_DEFAULT_RG}"
+  [[ -z "$rg" ]] && __bmaz_error "BMAZ_DEFAULT_RG must be set for deployments" && return 1
+
+  az deployment group list             \
+    --resource-group "$rg"             \
+    --output tsv                       \
+    --query "[].{
+      Id:join('/', ['$rg', name]),
+      State:properties.provisioningState,
+      Timestamp:properties.timestamp,
+      Type:type
+    }" |
+  grep -E -- "$filters" |
+  LC_ALL=C sort -t$'\t' -k 3 -r |
+    columnise
+}
+
+
+deployment-status() {
+
+  # Show provisioning state of deployment(s)
+  #
+  #     USAGE: deployment-status rg/deployment-name [rg/deployment-name]
+  #
+  #     $ deployments | deployment-status
+  #     prod-rg/web-deploy    Succeeded   2026-05-20T10:30:00Z  00:05:32
+  #     prod-rg/infra-deploy  Succeeded   2026-05-18T08:15:00Z  00:12:45
+
+  [[ "${1:-}" == --help ]] && __bmaz_help && return 0
+
+  local deploy_ids=($(skim-stdin "$@"))
+  [[ ${#deploy_ids[@]} -eq 0 ]] && __bmaz_usage "rg/deployment-name [rg/deployment-name]" && return 1
+
+  local deploy_id
+  for deploy_id in "${deploy_ids[@]}"; do
+    __bmaz_parse_resource "$deploy_id" || return 1
+    az deployment group show               \
+      --resource-group "$_bmaz_rg"         \
+      --name "$_bmaz_name"                 \
+      --output tsv                         \
+      --query "{
+        Id:'$deploy_id',
+        State:properties.provisioningState,
+        Timestamp:properties.timestamp,
+        Duration:properties.duration
+      }"
+  done |
+    columnise
+}
+
+
+deployment-errors() {
+
+  # Show error details for failed deployment(s)
+  #
+  #     USAGE: deployment-errors rg/deployment-name [rg/deployment-name]
+  #
+  #     $ deployments | grep Failed | deployment-errors
+  #     dev-rg/test-deploy  InvalidTemplate  Deployment template validation failed
+
+  [[ "${1:-}" == --help ]] && __bmaz_help && return 0
+
+  local deploy_ids=($(skim-stdin "$@"))
+  [[ ${#deploy_ids[@]} -eq 0 ]] && __bmaz_usage "rg/deployment-name [rg/deployment-name]" && return 1
+
+  local deploy_id
+  for deploy_id in "${deploy_ids[@]}"; do
+    __bmaz_parse_resource "$deploy_id" || return 1
+    az deployment group show               \
+      --resource-group "$_bmaz_rg"         \
+      --name "$_bmaz_name"                 \
+      --output tsv                         \
+      --query "{
+        Id:'$deploy_id',
+        Code:properties.error.code,
+        Message:properties.error.message
+      }" 2>/dev/null
+  done |
+    columnise
+}
+
+
+deployment-outputs() {
+
+  # Show outputs from a deployment
+  #
+  #     USAGE: deployment-outputs rg/deployment-name [rg/deployment-name]
+  #
+  #     $ echo "prod-rg/web-deploy" | deployment-outputs
+  #     webUrl   https://myapp.azurewebsites.net
+  #     appId    12345678-abcd-efgh-1234-567890abcdef
+
+  [[ "${1:-}" == --help ]] && __bmaz_help && return 0
+
+  local deploy_ids=($(skim-stdin "$@"))
+  [[ ${#deploy_ids[@]} -eq 0 ]] && __bmaz_usage "rg/deployment-name [rg/deployment-name]" && return 1
+
+  local deploy_id
+  for deploy_id in "${deploy_ids[@]}"; do
+    __bmaz_parse_resource "$deploy_id" || return 1
+    az deployment group show               \
+      --resource-group "$_bmaz_rg"         \
+      --name "$_bmaz_name"                 \
+      --output json                        \
+      --query "properties.outputs" 2>/dev/null |
+    jq -r --arg id "$deploy_id" \
+      'to_entries[]? | [$id, .key, (.value.value|tostring)] | @tsv' 2>/dev/null
+  done |
+    columnise
+}
+
+
+deployment-resources() {
+
+  # List resources created by a deployment
+  #
+  #     USAGE: deployment-resources rg/deployment-name [rg/deployment-name]
+  #
+  #     $ echo "prod-rg/web-deploy" | deployment-resources
+  #     Microsoft.Web/sites          mywebapp
+  #     Microsoft.Web/serverfarms    myplan
+
+  [[ "${1:-}" == --help ]] && __bmaz_help && return 0
+
+  local deploy_ids=($(skim-stdin "$@"))
+  [[ ${#deploy_ids[@]} -eq 0 ]] && __bmaz_usage "rg/deployment-name [rg/deployment-name]" && return 1
+
+  local deploy_id
+  for deploy_id in "${deploy_ids[@]}"; do
+    __bmaz_parse_resource "$deploy_id" || return 1
+    az deployment operation group list     \
+      --resource-group "$_bmaz_rg"         \
+      --name "$_bmaz_name"                 \
+      --output tsv                         \
+      --query "[?properties.targetResource.resourceType != null].{
+        Type:properties.targetResource.resourceType,
+        Name:properties.targetResource.resourceName,
+        State:properties.provisioningState
+      }"
+  done |
+    columnise
+}
+
+
+deployment-delete() {
+
+  # Delete deployment(s) (with confirmation)
+  #
+  #     USAGE: deployment-delete rg/deployment-name [rg/deployment-name]
+
+  [[ "${1:-}" == --help ]] && __bmaz_help && return 0
+
+  local deploy_ids=($(skim-stdin "$@"))
+  [[ ${#deploy_ids[@]} -eq 0 ]] && __bmaz_usage "rg/deployment-name [rg/deployment-name]" && return 1
+
+  echo "You are about to delete the following deployments:"
+  printf '%s\n' "${deploy_ids[@]}"
+  read -r -p "Are you sure? [y/N] " response
+  [[ "$response" =~ ^[Yy] ]] || return 0
+
+  local deploy_id
+  for deploy_id in "${deploy_ids[@]}"; do
+    __bmaz_parse_resource "$deploy_id" || return 1
+    az deployment group delete             \
+      --resource-group "$_bmaz_rg"         \
+      --name "$_bmaz_name"                 \
+      --output tsv
+    echo "Deleted: $deploy_id"
+  done
+}
