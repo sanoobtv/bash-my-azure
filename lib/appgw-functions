@@ -260,16 +260,36 @@ appgw-frontend-ips() {
   local appgw_id
   for appgw_id in "${appgw_ids[@]}"; do
     __bmaz_parse_resource "$appgw_id" || return 1
+    local rg="$_bmaz_rg"
     az network application-gateway frontend-ip list \
-      --resource-group "$_bmaz_rg"                  \
+      --resource-group "$rg"                        \
       --gateway-name "$_bmaz_name"                  \
       --output tsv                                  \
       --query "[].{
         Name:name,
-        Type:privateIPAddress && 'Private' || 'Public',
-        IP:privateIPAddress || publicIPAddress.id || 'dynamic',
+        PrivateIP:privateIPAddress,
+        PubIPId:publicIPAddress.id,
         AppGW:'$appgw_id'
-      }" | awk -F'\t' 'BEGIN{OFS="\t"} { if($3 ~ /^\/subscriptions/) { n=split($3,a,"/"); $3=a[n] } print }'
+      }" |
+    while IFS=$'\t' read -r name private_ip pub_id appgw; do
+      local ip_type ip_addr
+      if [[ -n "$private_ip" && "$private_ip" != "None" ]]; then
+        ip_type="Private"
+        ip_addr="$private_ip"
+      elif [[ -n "$pub_id" && "$pub_id" != "None" ]]; then
+        ip_type="Public"
+        local pip_name="${pub_id##*/}"
+        ip_addr=$(az network public-ip show \
+          --resource-group "$rg" \
+          --name "$pip_name" \
+          --query "ipAddress" -o tsv 2>/dev/null)
+        [[ -z "$ip_addr" ]] && ip_addr="(unallocated)"
+      else
+        ip_type="Public"
+        ip_addr="(unallocated)"
+      fi
+      printf '%s\t%s\t%s\t%s\n' "$name" "$ip_type" "$ip_addr" "$appgw"
+    done
   done |
     columnise
 }
