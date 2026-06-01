@@ -45,7 +45,11 @@ export AZURE_CORE_ONLY_SHOW_ERRORS=\"\${AZURE_CORE_ONLY_SHOW_ERRORS:-1}\"
 
 # Load functions directly into your shell: fast (no per-call subprocess),
 # composable, and picks up a plain 'export BMAZ_DEFAULT_RG=...'.
+# Temporarily suppress alias expansion so sourced fn defs don't collide
+# with identically-named aliases from other tools (e.g. bash-my-aws).
+[[ -n \"\${ZSH_VERSION:-}\" ]] && setopt NO_ALIASES
 for f in \"\$BMAZ_HOME\"/lib/*-functions; do source \"\$f\"; done
+[[ -n \"\${ZSH_VERSION:-}\" ]] && setopt ALIASES
 
 # For ZSH users:
 if [[ -n \"\$ZSH_VERSION\" ]]; then
