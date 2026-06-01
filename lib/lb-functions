@@ -1,0 +1,174 @@
+#!/bin/bash
+#
+# lb-functions
+#
+# List and inspect Azure Load Balancers, rules, probes, and backend pools
+
+lbs() {
+
+  # List Load Balancers
+  #
+  #     $ lbs
+  #     prod-rg/web-lb      Standard  Public    eastus     Succeeded
+  #     prod-rg/internal-lb Standard  Internal  eastus     Succeeded
+  #     dev-rg/dev-lb       Basic     Public    westus2    Succeeded
+  #
+  # *Optionally provide a filter string:*
+  #
+  #     $ lbs web
+  #     prod-rg/web-lb  Standard  Public  eastus  Succeeded
+
+  [[ "${1:-}" == --help ]] && __bmaz_help && return 0
+
+  local filters=$(__bmaz_read_filters "$@")
+
+  local rg_args=()
+  [[ -n "$BMAZ_DEFAULT_RG" ]] && rg_args=(--resource-group "$BMAZ_DEFAULT_RG")
+
+  az network lb list "${rg_args[@]}" \
+    --output tsv                     \
+    --query "[].{
+      Id:join('/', [resourceGroup, name]),
+      Sku:sku.name,
+      Type:frontendIPConfigurations[0].properties.privateIPAllocationMethod || 'Public',
+      Location:location,
+      State:provisioningState
+    }" |
+  grep -E -- "$filters" |
+  LC_ALL=C sort -t$'\t' -k 1 |
+    columnise
+}
+
+
+lb-rules() {
+
+  # List load balancing rules for LB(s)
+  #
+  #     USAGE: lb-rules rg/lb-name [rg/lb-name]
+  #
+  #     $ lbs | lb-rules
+  #     http-rule   Tcp  80    8080    prod-rg/web-lb
+  #     https-rule  Tcp  443   8443    prod-rg/web-lb
+
+  [[ "${1:-}" == --help ]] && __bmaz_help && return 0
+
+  local lb_ids=($(skim-stdin "$@"))
+  [[ ${#lb_ids[@]} -eq 0 ]] && __bmaz_usage "rg/lb-name [rg/lb-name]" && return 1
+
+  local lb_id
+  for lb_id in "${lb_ids[@]}"; do
+    __bmaz_parse_resource "$lb_id" || return 1
+    az network lb rule list            \
+      --resource-group "$_bmaz_rg"     \
+      --lb-name "$_bmaz_name"          \
+      --output tsv                     \
+      --query "[].{
+        Name:name,
+        Protocol:protocol,
+        FrontendPort:frontendPort,
+        BackendPort:backendPort,
+        LB:'$lb_id'
+      }"
+  done |
+    columnise
+}
+
+
+lb-probes() {
+
+  # List health probes for LB(s)
+  #
+  #     USAGE: lb-probes rg/lb-name [rg/lb-name]
+  #
+  #     $ lbs | grep web | lb-probes
+  #     http-probe   Http   80    /healthz  15   2    prod-rg/web-lb
+  #     tcp-probe    Tcp    443   null      30   3    prod-rg/web-lb
+
+  [[ "${1:-}" == --help ]] && __bmaz_help && return 0
+
+  local lb_ids=($(skim-stdin "$@"))
+  [[ ${#lb_ids[@]} -eq 0 ]] && __bmaz_usage "rg/lb-name [rg/lb-name]" && return 1
+
+  local lb_id
+  for lb_id in "${lb_ids[@]}"; do
+    __bmaz_parse_resource "$lb_id" || return 1
+    az network lb probe list           \
+      --resource-group "$_bmaz_rg"     \
+      --lb-name "$_bmaz_name"          \
+      --output tsv                     \
+      --query "[].{
+        Name:name,
+        Protocol:protocol,
+        Port:port,
+        Path:requestPath || 'null',
+        Interval:intervalInSeconds,
+        Threshold:numberOfProbes,
+        LB:'$lb_id'
+      }"
+  done |
+    columnise
+}
+
+
+lb-backends() {
+
+  # List backend address pools for LB(s)
+  #
+  #     USAGE: lb-backends rg/lb-name [rg/lb-name]
+  #
+  #     $ lbs | grep web | lb-backends
+  #     web-backend-pool  2  prod-rg/web-lb
+
+  [[ "${1:-}" == --help ]] && __bmaz_help && return 0
+
+  local lb_ids=($(skim-stdin "$@"))
+  [[ ${#lb_ids[@]} -eq 0 ]] && __bmaz_usage "rg/lb-name [rg/lb-name]" && return 1
+
+  local lb_id
+  for lb_id in "${lb_ids[@]}"; do
+    __bmaz_parse_resource "$lb_id" || return 1
+    az network lb address-pool list    \
+      --resource-group "$_bmaz_rg"     \
+      --lb-name "$_bmaz_name"          \
+      --output tsv                     \
+      --query "[].{
+        Name:name,
+        Addresses:length(backendAddresses || loadBalancerBackendAddresses || \`[]\`),
+        LB:'$lb_id'
+      }"
+  done |
+    columnise
+}
+
+
+lb-frontend-ips() {
+
+  # List frontend IP configurations for LB(s)
+  #
+  #     USAGE: lb-frontend-ips rg/lb-name [rg/lb-name]
+  #
+  #     $ lbs | grep web | lb-frontend-ips
+  #     frontend-ip-01  Public   20.1.2.3     prod-rg/web-lb
+  #     frontend-ip-02  Private  10.0.1.100   prod-rg/web-lb
+
+  [[ "${1:-}" == --help ]] && __bmaz_help && return 0
+
+  local lb_ids=($(skim-stdin "$@"))
+  [[ ${#lb_ids[@]} -eq 0 ]] && __bmaz_usage "rg/lb-name [rg/lb-name]" && return 1
+
+  local lb_id
+  for lb_id in "${lb_ids[@]}"; do
+    __bmaz_parse_resource "$lb_id" || return 1
+    az network lb frontend-ip list     \
+      --resource-group "$_bmaz_rg"     \
+      --lb-name "$_bmaz_name"          \
+      --output tsv                     \
+      --query "[].{
+        Name:name,
+        Type:privateIPAddress && 'Private' || 'Public',
+        IP:privateIPAddress || publicIPAddress.ipAddress || 'dynamic',
+        LB:'$lb_id'
+      }"
+  done |
+    columnise
+}

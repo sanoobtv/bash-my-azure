@@ -6,6 +6,14 @@ ad-group-members
 ad-groups
 ad-sp
 ad-users
+appgw-backends
+appgw-frontend-ips
+appgw-listeners
+appgw-probes
+appgw-rules
+appgw-ssl-certs
+appgw-ssl-profiles
+appgws
 blob-container-blobs
 blob-containers
 columnise
@@ -18,6 +26,11 @@ deployment-status
 deployments
 keyvault-keys
 keyvaults
+lb-backends
+lb-frontend-ips
+lb-probes
+lb-rules
+lbs
 mysql-servers
 nsg-rules
 nsgs

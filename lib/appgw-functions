@@ -1,0 +1,275 @@
+#!/bin/bash
+#
+# appgw-functions
+#
+# List and inspect Azure Application Gateways, listeners, rules, SSL certs, and profiles
+
+appgws() {
+
+  # List Application Gateways
+  #
+  #     $ appgws
+  #     prod-rg/web-appgw       Standard_v2  2  Running    eastus     Succeeded
+  #     prod-rg/api-appgw       WAF_v2       3  Running    eastus     Succeeded
+  #     dev-rg/dev-appgw        Standard_v2  1  Running    westus2    Succeeded
+  #
+  # *Optionally provide a filter string:*
+  #
+  #     $ appgws web
+  #     prod-rg/web-appgw  Standard_v2  2  Running  eastus  Succeeded
+
+  [[ "${1:-}" == --help ]] && __bmaz_help && return 0
+
+  local filters=$(__bmaz_read_filters "$@")
+
+  local rg_args=()
+  [[ -n "$BMAZ_DEFAULT_RG" ]] && rg_args=(--resource-group "$BMAZ_DEFAULT_RG")
+
+  az network application-gateway list "${rg_args[@]}" \
+    --output tsv                                      \
+    --query "[].{
+      Id:join('/', [resourceGroup, name]),
+      Tier:sku.tier,
+      Capacity:sku.capacity,
+      OperationalState:operationalState,
+      Location:location,
+      State:provisioningState
+    }" |
+  grep -E -- "$filters" |
+  LC_ALL=C sort -t$'\t' -k 1 |
+    columnise
+}
+
+
+appgw-listeners() {
+
+  # List HTTP listeners for Application Gateway(s)
+  #
+  #     USAGE: appgw-listeners rg/appgw-name [rg/appgw-name]
+  #
+  #     $ appgws | appgw-listeners
+  #     https-listener   Https  443  www.example.com     prod-rg/web-appgw
+  #     http-listener    Http   80   www.example.com     prod-rg/web-appgw
+  #     api-listener     Https  443  api.example.com     prod-rg/web-appgw
+
+  [[ "${1:-}" == --help ]] && __bmaz_help && return 0
+
+  local appgw_ids=($(skim-stdin "$@"))
+  [[ ${#appgw_ids[@]} -eq 0 ]] && __bmaz_usage "rg/appgw-name [rg/appgw-name]" && return 1
+
+  local appgw_id
+  for appgw_id in "${appgw_ids[@]}"; do
+    __bmaz_parse_resource "$appgw_id" || return 1
+    az network application-gateway http-listener list \
+      --resource-group "$_bmaz_rg"                    \
+      --gateway-name "$_bmaz_name"                    \
+      --output tsv                                    \
+      --query "[].{
+        Name:name,
+        Protocol:protocol,
+        PortRef:frontendPort.id,
+        Host:hostName || hostNames[0] || '*',
+        AppGW:'$appgw_id'
+      }" | awk -F'\t' 'BEGIN{OFS="\t"} { n=split($3,a,"/"); $3=a[n]; print }'
+  done |
+    columnise
+}
+
+
+appgw-rules() {
+
+  # List request routing rules for Application Gateway(s)
+  #
+  #     USAGE: appgw-rules rg/appgw-name [rg/appgw-name]
+  #
+  #     $ appgws | grep web | appgw-rules
+  #     https-rule  Basic      100  https-listener   prod-rg/web-appgw
+  #     http-rule   PathBased  200  http-listener    prod-rg/web-appgw
+
+  [[ "${1:-}" == --help ]] && __bmaz_help && return 0
+
+  local appgw_ids=($(skim-stdin "$@"))
+  [[ ${#appgw_ids[@]} -eq 0 ]] && __bmaz_usage "rg/appgw-name [rg/appgw-name]" && return 1
+
+  local appgw_id
+  for appgw_id in "${appgw_ids[@]}"; do
+    __bmaz_parse_resource "$appgw_id" || return 1
+    az network application-gateway rule list      \
+      --resource-group "$_bmaz_rg"                \
+      --gateway-name "$_bmaz_name"                \
+      --output tsv                                \
+      --query "[].{
+        Name:name,
+        Type:ruleType,
+        Priority:priority,
+        ListenerRef:httpListener.id,
+        AppGW:'$appgw_id'
+      }" | awk -F'\t' 'BEGIN{OFS="\t"} { n=split($4,a,"/"); $4=a[n]; print }'
+  done |
+    columnise
+}
+
+
+appgw-backends() {
+
+  # List backend address pools for Application Gateway(s)
+  #
+  #     USAGE: appgw-backends rg/appgw-name [rg/appgw-name]
+  #
+  #     $ appgws | grep web | appgw-backends
+  #     web-backend   3  prod-rg/web-appgw
+  #     api-backend   2  prod-rg/web-appgw
+
+  [[ "${1:-}" == --help ]] && __bmaz_help && return 0
+
+  local appgw_ids=($(skim-stdin "$@"))
+  [[ ${#appgw_ids[@]} -eq 0 ]] && __bmaz_usage "rg/appgw-name [rg/appgw-name]" && return 1
+
+  local appgw_id
+  for appgw_id in "${appgw_ids[@]}"; do
+    __bmaz_parse_resource "$appgw_id" || return 1
+    az network application-gateway address-pool list \
+      --resource-group "$_bmaz_rg"                   \
+      --gateway-name "$_bmaz_name"                   \
+      --output tsv                                   \
+      --query "[].{
+        Name:name,
+        Targets:length(backendAddresses),
+        AppGW:'$appgw_id'
+      }"
+  done |
+    columnise
+}
+
+
+appgw-ssl-certs() {
+
+  # List SSL certificates on Application Gateway(s)
+  #
+  #     USAGE: appgw-ssl-certs rg/appgw-name [rg/appgw-name]
+  #
+  #     $ appgws | appgw-ssl-certs
+  #     wildcard-cert     KeyVault  prod-rg/web-appgw
+  #     api-cert          Uploaded  prod-rg/web-appgw
+
+  [[ "${1:-}" == --help ]] && __bmaz_help && return 0
+
+  local appgw_ids=($(skim-stdin "$@"))
+  [[ ${#appgw_ids[@]} -eq 0 ]] && __bmaz_usage "rg/appgw-name [rg/appgw-name]" && return 1
+
+  local appgw_id
+  for appgw_id in "${appgw_ids[@]}"; do
+    __bmaz_parse_resource "$appgw_id" || return 1
+    az network application-gateway ssl-cert list  \
+      --resource-group "$_bmaz_rg"                \
+      --gateway-name "$_bmaz_name"                \
+      --output tsv                                \
+      --query "[].{
+        Name:name,
+        Source:keyVaultSecretId && 'KeyVault' || 'Uploaded',
+        AppGW:'$appgw_id'
+      }"
+  done |
+    columnise
+}
+
+
+appgw-ssl-profiles() {
+
+  # List SSL profiles for Application Gateway(s)
+  #
+  #     USAGE: appgw-ssl-profiles rg/appgw-name [rg/appgw-name]
+  #
+  #     $ appgws | grep web | appgw-ssl-profiles
+  #     strict-profile   AppGwSslPolicy20220101S  1  prod-rg/web-appgw
+  #     default-profile  AppGwSslPolicy20220101   0  prod-rg/web-appgw
+
+  [[ "${1:-}" == --help ]] && __bmaz_help && return 0
+
+  local appgw_ids=($(skim-stdin "$@"))
+  [[ ${#appgw_ids[@]} -eq 0 ]] && __bmaz_usage "rg/appgw-name [rg/appgw-name]" && return 1
+
+  local appgw_id
+  for appgw_id in "${appgw_ids[@]}"; do
+    __bmaz_parse_resource "$appgw_id" || return 1
+    az network application-gateway ssl-profile list \
+      --resource-group "$_bmaz_rg"                  \
+      --gateway-name "$_bmaz_name"                  \
+      --output tsv                                  \
+      --query "[].{
+        Name:name,
+        Policy:sslPolicy.policyName || 'Custom',
+        TrustedCAs:length(trustedClientCertificates || \`[]\`),
+        AppGW:'$appgw_id'
+      }"
+  done |
+    columnise
+}
+
+
+appgw-probes() {
+
+  # List custom health probes for Application Gateway(s)
+  #
+  #     USAGE: appgw-probes rg/appgw-name [rg/appgw-name]
+  #
+  #     $ appgws | grep web | appgw-probes
+  #     web-probe   Https  /health   30  3  prod-rg/web-appgw
+  #     api-probe   Http   /readyz   15  2  prod-rg/web-appgw
+
+  [[ "${1:-}" == --help ]] && __bmaz_help && return 0
+
+  local appgw_ids=($(skim-stdin "$@"))
+  [[ ${#appgw_ids[@]} -eq 0 ]] && __bmaz_usage "rg/appgw-name [rg/appgw-name]" && return 1
+
+  local appgw_id
+  for appgw_id in "${appgw_ids[@]}"; do
+    __bmaz_parse_resource "$appgw_id" || return 1
+    az network application-gateway probe list  \
+      --resource-group "$_bmaz_rg"             \
+      --gateway-name "$_bmaz_name"             \
+      --output tsv                             \
+      --query "[].{
+        Name:name,
+        Protocol:protocol,
+        Path:path,
+        Interval:interval,
+        Threshold:unhealthyThreshold,
+        AppGW:'$appgw_id'
+      }"
+  done |
+    columnise
+}
+
+
+appgw-frontend-ips() {
+
+  # List frontend IP configurations for Application Gateway(s)
+  #
+  #     USAGE: appgw-frontend-ips rg/appgw-name [rg/appgw-name]
+  #
+  #     $ appgws | grep web | appgw-frontend-ips
+  #     appGwPublicFrontendIp   Public   20.53.1.100  prod-rg/web-appgw
+  #     appGwPrivateFrontendIp  Private  10.0.1.50    prod-rg/web-appgw
+
+  [[ "${1:-}" == --help ]] && __bmaz_help && return 0
+
+  local appgw_ids=($(skim-stdin "$@"))
+  [[ ${#appgw_ids[@]} -eq 0 ]] && __bmaz_usage "rg/appgw-name [rg/appgw-name]" && return 1
+
+  local appgw_id
+  for appgw_id in "${appgw_ids[@]}"; do
+    __bmaz_parse_resource "$appgw_id" || return 1
+    az network application-gateway frontend-ip list \
+      --resource-group "$_bmaz_rg"                  \
+      --gateway-name "$_bmaz_name"                  \
+      --output tsv                                  \
+      --query "[].{
+        Name:name,
+        Type:privateIPAddress && 'Private' || 'Public',
+        IP:privateIPAddress || publicIPAddress.id || 'dynamic',
+        AppGW:'$appgw_id'
+      }" | awk -F'\t' 'BEGIN{OFS="\t"} { if($3 ~ /^\/subscriptions/) { n=split($3,a,"/"); $3=a[n] } print }'
+  done |
+    columnise
+}
