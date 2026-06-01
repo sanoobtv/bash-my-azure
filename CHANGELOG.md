@@ -2,6 +2,11 @@
 
 ## [Unreleased]
 
+### Added
+- `lib/lb-functions` — `lbs`, `lb-rules`, `lb-probes`, `lb-backends`, `lb-frontend-ips`
+- `lib/appgw-functions` — `appgws`, `appgw-listeners`, `appgw-rules`, `appgw-backends`, `appgw-ssl-certs`, `appgw-ssl-profiles`, `appgw-probes`, `appgw-frontend-ips`
+- `test/lb-appgw.bats` — 27 unit tests for Load Balancer and Application Gateway functions
+
 ### Fixed
 - `vm-ssh` selected the wrong VM — bash array index `[1]` → `[0]`
 - `bin/bmaz` "disable pager" was a no-op; now sets `AZURE_CORE_NO_COLOR=1` + `AZURE_CORE_ONLY_SHOW_ERRORS=1`

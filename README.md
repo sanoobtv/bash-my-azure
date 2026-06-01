@@ -33,7 +33,7 @@ AllowSSH  Inbound  Allow  100  Tcp  22  *
 - **Filter built-in** — `vms web` = `vms | grep web` with tighter columns
 - **Self-documenting** — `<command> --help` prints usage and examples (e.g. `vms --help`)
 - **Resource group aware** — `export BMAZ_DEFAULT_RG=prod-rg` once and every command is scoped to it
-- **58 functions** across 15 service files
+- **71 functions** across 17 service files
 - **Works in bash 4+ and zsh** — tested on macOS and Linux
 
 ## Design Philosophy
@@ -172,6 +172,54 @@ $ vm-test-connectivity prod-rg/web-vm 10.1.0.4 5432
 prod-rg/web-vm  10.1.0.4:5432  Reachable  12ms  2 hops
 ```
 
+### Load Balancers
+
+```bash
+$ lbs
+prod-rg/web-lb       Standard  Public    eastus   Succeeded
+prod-rg/internal-lb  Standard  Private   eastus   Succeeded
+
+$ lbs | lb-rules
+http-rule   Tcp  80   8080  prod-rg/web-lb
+https-rule  Tcp  443  8443  prod-rg/web-lb
+
+$ lbs | grep web | lb-probes
+http-probe  Http  80   /healthz  15  2  prod-rg/web-lb
+tcp-probe   Tcp   443  null      30  3  prod-rg/web-lb
+
+$ lbs | lb-backends
+web-backend-pool  2  prod-rg/web-lb
+
+$ lbs | lb-frontend-ips
+frontend-ip-01  Public   20.1.2.3    prod-rg/web-lb
+frontend-ip-02  Private  10.0.1.100  prod-rg/web-lb
+```
+
+### Application Gateways
+
+```bash
+$ appgws
+prod-rg/web-appgw  Standard_v2  2  Running  eastus   Succeeded
+prod-rg/api-appgw  WAF_v2       3  Running  eastus   Succeeded
+
+$ appgws | appgw-listeners
+https-listener  Https  443  www.example.com  prod-rg/web-appgw
+http-listener   Http   80   www.example.com  prod-rg/web-appgw
+api-listener    Https  443  api.example.com  prod-rg/web-appgw
+
+$ appgws | grep web | appgw-ssl-certs
+wildcard-cert  KeyVault  prod-rg/web-appgw
+api-cert       Uploaded  prod-rg/web-appgw
+
+$ appgws | appgw-ssl-profiles
+strict-profile   AppGwSslPolicy20220101S  1  prod-rg/web-appgw
+default-profile  AppGwSslPolicy20220101   0  prod-rg/web-appgw
+
+$ appgws | appgw-probes
+web-probe  Https  /health  30  3  prod-rg/web-appgw
+api-probe  Http   /readyz  15  2  prod-rg/web-appgw
+```
+
 ### Storage
 
 ```bash
@@ -306,6 +354,8 @@ australiacentral2  Australia Central 2  Asia Pacific
 | VMs | `vms`, `vm-status`, `vm-ip`, `vm-start`, `vm-stop`, `vm-deallocate`, `vm-restart`, `vm-ssh`, `vm-delete` |
 | VNets | `vnets`, `subnets`, `vnet-subnets` |
 | NSGs | `nsgs`, `nsg-rules` |
+| Load Balancers | `lbs`, `lb-rules`, `lb-probes`, `lb-backends`, `lb-frontend-ips` |
+| App Gateways | `appgws`, `appgw-listeners`, `appgw-rules`, `appgw-backends`, `appgw-ssl-certs`, `appgw-ssl-profiles`, `appgw-probes`, `appgw-frontend-ips` |
 | Network Watcher | `vm-effective-routes`, `vm-next-hop`, `vm-test-flow`, `vm-test-connectivity` |
 | Storage | `storage-accounts`, `blob-containers`, `blob-container-blobs` |
 | Key Vault | `keyvaults`, `keyvault-keys` |

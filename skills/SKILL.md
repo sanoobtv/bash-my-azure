@@ -57,6 +57,16 @@ Simple, powerful CLI commands for managing Azure resources. Port of [bash-my-aws
 - `ad-apps`
 - `ad-sp`
 
+### appgw
+- `appgws`
+- `appgw-listeners`
+- `appgw-rules`
+- `appgw-backends`
+- `appgw-ssl-certs`
+- `appgw-ssl-profiles`
+- `appgw-probes`
+- `appgw-frontend-ips`
+
 ### db
 - `sql-servers`
 - `sql-databases`
@@ -76,6 +86,13 @@ Simple, powerful CLI commands for managing Azure resources. Port of [bash-my-aws
 ### keyvault
 - `keyvaults`
 - `keyvault-keys`
+
+### lb
+- `lbs`
+- `lb-rules`
+- `lb-probes`
+- `lb-backends`
+- `lb-frontend-ips`
 
 ### network-watcher
 - `vm-effective-routes`
