@@ -53,7 +53,7 @@ __bmaz_help() {
   # Print the doc-comment block of the calling function.
   # Functions invoke this via:  [[ "$1" == --help ]] && __bmaz_help && return 0
 
-  local fn="${FUNCNAME[1]}"
+  local fn="${FUNCNAME[1]:-${funcstack[2]:-}}"
   local home="${BMAZ_HOME:-$HOME/.bash-my-azure}"
   awk -v fn="$fn" '
     $0 ~ "^" fn "\\(\\) \\{" { infn = 1; next }
@@ -71,7 +71,7 @@ __bmaz_error() {
 
 
 __bmaz_usage() {
-  echo "USAGE: ${FUNCNAME[1]} $*" >&2
+  echo "USAGE: ${FUNCNAME[1]:-${funcstack[2]:-}} $*" >&2
 }
 
 
