@@ -67,10 +67,10 @@ appgw-listeners() {
       --query "[].{
         Name:name,
         Protocol:protocol,
-        Port:frontendPort && split(frontendPort.id, '/') | [-1] || 'default',
+        PortRef:frontendPort.id,
         Host:hostName || hostNames[0] || '*',
         AppGW:'$appgw_id'
-      }"
+      }" | awk -F'\t' 'BEGIN{OFS="\t"} { n=split($3,a,"/"); $3=a[n]; print }'
   done |
     columnise
 }
@@ -102,9 +102,9 @@ appgw-rules() {
         Name:name,
         Type:ruleType,
         Priority:priority,
-        Listener:split(httpListener.id, '/') | [-1],
+        ListenerRef:httpListener.id,
         AppGW:'$appgw_id'
-      }"
+      }" | awk -F'\t' 'BEGIN{OFS="\t"} { n=split($4,a,"/"); $4=a[n]; print }'
   done |
     columnise
 }
@@ -267,9 +267,9 @@ appgw-frontend-ips() {
       --query "[].{
         Name:name,
         Type:privateIPAddress && 'Private' || 'Public',
-        IP:privateIPAddress || publicIPAddress.id && split(publicIPAddress.id, '/') | [-1] || 'dynamic',
+        IP:privateIPAddress || publicIPAddress.id || 'dynamic',
         AppGW:'$appgw_id'
-      }"
+      }" | awk -F'\t' 'BEGIN{OFS="\t"} { if($3 ~ /^\/subscriptions/) { n=split($3,a,"/"); $3=a[n] } print }'
   done |
     columnise
 }
