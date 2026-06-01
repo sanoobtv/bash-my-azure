@@ -1,0 +1,215 @@
+#!/bin/bash
+#
+# funcapp-functions
+#
+# List and manage Azure Function Apps
+
+funcapps() {
+
+  # List Function Apps
+  #
+  #     $ funcapps
+  #     prod-rg/my-func-app    Running  S1          eastus
+  #     dev-rg/dev-func-app    Running  Y1          westus2
+  #
+  # With BMAZ_DEFAULT_RG set, shows short names:
+  #
+  #     $ BMAZ_DEFAULT_RG=prod-rg funcapps
+  #     my-func-app  Running  S1  eastus
+  #
+  # *Optionally provide a filter string:*
+  #
+  #     $ funcapps prod
+  #     prod-rg/my-func-app  Running  S1  eastus
+
+  [[ "${1:-}" == --help ]] && __bmaz_help && return 0
+
+  local filters=$(__bmaz_read_filters "$@")
+
+  local rg_args=()
+  [[ -n "${BMAZ_DEFAULT_RG:-}" ]] && rg_args=(--resource-group "$BMAZ_DEFAULT_RG")
+
+  az functionapp list "${rg_args[@]}" \
+    --output tsv                      \
+    --query "[].{
+      Id:join('/', [resourceGroup, name]),
+      State:state,
+      Runtime:kind,
+      Location:location
+    }" 2>/dev/null |
+  grep -E -- "${filters:-.}" |
+  LC_ALL=C sort -t$'\t' -k 1 |
+    columnise
+}
+
+
+funcapp-show() {
+
+  # Show details of Function App(s)
+  #
+  #     USAGE: funcapp-show rg/name [rg/name]
+  #
+  #     $ funcapps | funcapp-show
+  #     prod-rg/my-func-app  Running  dotnet  S1  https://my-func-app.azurewebsites.net
+
+  [[ "${1:-}" == --help ]] && __bmaz_help && return 0
+
+  local ids=($(skim-stdin "$@"))
+  [[ ${#ids[@]} -eq 0 ]] && __bmaz_usage "rg/name [rg/name]" && return 1
+
+  local id
+  for id in "${ids[@]}"; do
+    __bmaz_parse_resource "$id" || return 1
+    az functionapp show                \
+      --resource-group "$_bmaz_rg"     \
+      --name "$_bmaz_name"             \
+      --output tsv                     \
+      --query "{
+        Id:join('/', [resourceGroup, name]),
+        State:state,
+        Runtime:siteConfig.linuxFxVersion || siteConfig.netFrameworkVersion || 'N/A',
+        DefaultHostName:defaultHostName
+      }"
+  done |
+    columnise
+}
+
+
+funcapp-start() {
+
+  # Start Function App(s)
+  #
+  #     USAGE: funcapp-start rg/name [rg/name]
+  #
+  #     $ funcapps | grep stopped | funcapp-start
+  #     Starting prod-rg/my-func-app...
+
+  [[ "${1:-}" == --help ]] && __bmaz_help && return 0
+
+  local ids=($(skim-stdin "$@"))
+  [[ ${#ids[@]} -eq 0 ]] && __bmaz_usage "rg/name [rg/name]" && return 1
+
+  local id
+  for id in "${ids[@]}"; do
+    __bmaz_parse_resource "$id" || return 1
+    echo "Starting $id..."
+    az functionapp start               \
+      --resource-group "$_bmaz_rg"     \
+      --name "$_bmaz_name"
+  done
+}
+
+
+funcapp-stop() {
+
+  # Stop Function App(s)
+  #
+  #     USAGE: funcapp-stop rg/name [rg/name]
+  #
+  #     $ funcapps | grep dev | funcapp-stop
+  #     Stopping dev-rg/dev-func-app...
+
+  [[ "${1:-}" == --help ]] && __bmaz_help && return 0
+
+  local ids=($(skim-stdin "$@"))
+  [[ ${#ids[@]} -eq 0 ]] && __bmaz_usage "rg/name [rg/name]" && return 1
+
+  local id
+  for id in "${ids[@]}"; do
+    __bmaz_parse_resource "$id" || return 1
+    echo "Stopping $id..."
+    az functionapp stop                \
+      --resource-group "$_bmaz_rg"     \
+      --name "$_bmaz_name"
+  done
+}
+
+
+funcapp-restart() {
+
+  # Restart Function App(s)
+  #
+  #     USAGE: funcapp-restart rg/name [rg/name]
+  #
+  #     $ funcapps | funcapp-restart
+  #     Restarting prod-rg/my-func-app...
+
+  [[ "${1:-}" == --help ]] && __bmaz_help && return 0
+
+  local ids=($(skim-stdin "$@"))
+  [[ ${#ids[@]} -eq 0 ]] && __bmaz_usage "rg/name [rg/name]" && return 1
+
+  local id
+  for id in "${ids[@]}"; do
+    __bmaz_parse_resource "$id" || return 1
+    echo "Restarting $id..."
+    az functionapp restart             \
+      --resource-group "$_bmaz_rg"     \
+      --name "$_bmaz_name"
+  done
+}
+
+
+funcapp-settings() {
+
+  # Show application settings of Function App(s)
+  #
+  #     USAGE: funcapp-settings rg/name [rg/name]
+  #
+  #     $ funcapps | funcapp-settings
+  #     prod-rg/my-func-app  AzureWebJobsStorage  DefaultEndpointsProtocol=...
+  #     prod-rg/my-func-app  FUNCTIONS_WORKER_RUNTIME  dotnet
+
+  [[ "${1:-}" == --help ]] && __bmaz_help && return 0
+
+  local ids=($(skim-stdin "$@"))
+  [[ ${#ids[@]} -eq 0 ]] && __bmaz_usage "rg/name [rg/name]" && return 1
+
+  local id
+  for id in "${ids[@]}"; do
+    __bmaz_parse_resource "$id" || return 1
+    az functionapp config appsettings list \
+      --resource-group "$_bmaz_rg"         \
+      --name "$_bmaz_name"                 \
+      --output tsv                         \
+      --query "[].{
+        Id:'$id',
+        Name:name,
+        Value:value
+      }"
+  done |
+    LC_ALL=C sort -t$'\t' -k 1 |
+    columnise
+}
+
+
+funcapp-functions() {
+
+  # List functions within a Function App
+  #
+  #     USAGE: funcapp-functions rg/name [rg/name]
+  #
+  #     $ funcapps | funcapp-functions
+  #     prod-rg/my-func-app  HttpTrigger1
+  #     prod-rg/my-func-app  TimerTrigger1
+
+  [[ "${1:-}" == --help ]] && __bmaz_help && return 0
+
+  local ids=($(skim-stdin "$@"))
+  [[ ${#ids[@]} -eq 0 ]] && __bmaz_usage "rg/name [rg/name]" && return 1
+
+  local id
+  for id in "${ids[@]}"; do
+    __bmaz_parse_resource "$id" || return 1
+    az functionapp function list        \
+      --resource-group "$_bmaz_rg"      \
+      --name "$_bmaz_name"              \
+      --output tsv                      \
+      --query "[].{
+        Id:'$id',
+        Function:name
+      }"
+  done |
+    LC_ALL=C sort -t$'\t' -k 1 |
+    columnise
+}
